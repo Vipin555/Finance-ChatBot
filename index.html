@@ -790,7 +790,17 @@ function buildGrowthAnalysis(projections, analysis) {
         scales: {
           x: {
             grid: { color: gridColor },
-            ticks: { color: textColor, font: { size: 10 }, callback: val => val.replace('Year ', 'Y') }
+            ticks: {
+              color: textColor,
+              font: { size: 10 },
+              callback: function(value) {
+                // For category scales, Chart.js passes an index (number) here.
+                const label = (this && typeof this.getLabelForValue === 'function')
+                  ? this.getLabelForValue(value)
+                  : String(value);
+                return String(label).replace('Year ', 'Y');
+              }
+            }
           },
           y: {
             grid: { color: gridColor },

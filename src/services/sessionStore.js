@@ -52,6 +52,9 @@ function createSession(userId, name) {
 
     // ── Analysis result (set after phase = 'analyze') ──
     analysis: null,
+
+    // ── UI enrichment state (safe to ignore in API clients) ──
+    suggestionState: { recent: [], counter: 0 },
   };
 }
 

@@ -411,34 +411,107 @@ function generateSimpleInsight(session, responseObj) {
 function generateSuggestedQuestions(session) {
   const profile = session.profile || {};
   const goal = profile.goal || 'wealth';
-  const income = profile.monthly_income || profile.income;
-  // Suggest max 2 related questions based on phase
-  if (!income) {
-    return ['I earn 50k/month', 'No specific income yet'];
+
+  // Keep suggestions relevant to the CURRENT phase.
+  // During collect, chips should behave like valid *answers* (so tapping them doesn't feel "outside my lane").
+  const phase = session.phase || 'collect';
+
+  const suggestRotate = (pool, count = 2) => {
+    const state = session.suggestionState || { recent: [], counter: 0 };
+    const recent = Array.isArray(state.recent) ? state.recent : [];
+    const normalizedPool = (pool || []).map(s => String(s || '').trim()).filter(Boolean);
+    if (normalizedPool.length === 0) return [];
+
+    const recentSet = new Set(recent);
+    const fresh = normalizedPool.filter(s => !recentSet.has(s.toLowerCase()));
+    const source = fresh.length >= count ? fresh : normalizedPool;
+
+    state.counter = (state.counter || 0) + 1;
+    const picked = [];
+    let cursor = state.counter;
+    while (picked.length < Math.min(count, source.length)) {
+      const item = source[cursor % source.length];
+      cursor += 1;
+      if (!picked.includes(item)) picked.push(item);
+    }
+
+    picked.forEach(s => recent.push(String(s).toLowerCase()));
+    state.recent = recent.slice(-12);
+    session.suggestionState = state;
+
+    return picked;
+  };
+
+  // ── Collect phase suggestions (example answers) ──
+  if (phase === 'collect') {
+    const income = profile.monthly_income || profile.income || 0;
+
+    // Flow-based collection (income-first baseline)
+    if (session.flowStage && session.flowStage !== 'analysis_complete') {
+      switch (session.flowStage) {
+        case 'awaiting_expenses_or_savings':
+          return suggestRotate([
+            income ? `expenses ${financeService.formatINR(Math.round(income * 0.6))}` : 'expenses 25k',
+            'saved 1L',
+            'expenses',
+            'savings'
+          ], 2);
+        case 'awaiting_expenses_value':
+          return suggestRotate([
+            income ? `${financeService.formatINR(Math.round(income * 0.6))}` : '25000',
+            income ? `${financeService.formatINR(Math.round(income * 0.75))}` : '40000',
+            '0'
+          ], 2);
+        case 'awaiting_savings_value':
+          return suggestRotate(['0', '50000', '1L', '2L'], 2);
+        case 'awaiting_age_and_goal':
+          return suggestRotate(['age 28 wealth', 'age 32 retirement', '24 house', '29 education'], 2);
+        case 'awaiting_investments':
+          return suggestRotate(['SIP 5k', 'FD only', 'PPF', 'nothing yet'], 2);
+        default:
+          break;
+      }
+    }
+
+    // Deterministic step-based collection
+    const stepIndex = Number.isFinite(session.currentStep) ? session.currentStep : 0;
+    const step = (stepIndex >= 0 && stepIndex < COLLECTION_STEPS.length) ? COLLECTION_STEPS[stepIndex] : null;
+    const field = step ? step.field : null;
+    if (field === 'age') return suggestRotate(['24', '28', '35', '42'], 2);
+    if (field === 'income') return suggestRotate(['50000', '75000', '100000', '150000'], 2);
+    if (field === 'expenses') {
+      const a = income ? Math.round(income * 0.55) : 30000;
+      const b = income ? Math.round(income * 0.75) : 45000;
+      return suggestRotate([String(a), String(b), '0'], 2);
+    }
+    if (field === 'savings') return suggestRotate(['0', '50000', '200000', '500000'], 2);
+    if (field === 'risk') return suggestRotate(['moderate', 'conservative', 'aggressive'], 2);
+    if (field === 'goal') return suggestRotate(['wealth', 'retirement', 'house', 'education'], 2);
+
+    // Safe fallback for collect
+    return suggestRotate(['income 75000', 'expenses 40000', 'saved 2L', 'moderate'], 2);
   }
 
-  const analysis = session.analysis;
-  if (!analysis) {
-    return ['Show me my potential', 'How to start investing?'];
-  }
+  // ── Post-analysis suggestions (finance Q&A prompts) ──
+  const analysis = session.analysis || null;
+  const investable = analysis && Number.isFinite(analysis.investable_amount) ? analysis.investable_amount : null;
 
-  // After analysis - goal-based suggestions
-  const suggestions = [];
-  if (goal === 'retirement') {
-    suggestions.push('Can I retire at 55?');
-    suggestions.push('What about early retirement?');
-  } else if (goal === 'house') {
-    suggestions.push('When can I buy a house?');
-    suggestions.push('Home loan options?');
-  } else if (goal === 'education') {
-    suggestions.push('Education plan timeline?');
-    suggestions.push('Best education funds?');
+  const base = [];
+  if (investable !== null) {
+    base.push(`If I invest ₹${financeService.formatINR(investable)}/mo, what happens in 5 years?`);
+    base.push(`How can I increase my SIP by ₹${financeService.formatINR(Math.max(1000, Math.round(investable * 0.2)))}/mo?`);
   } else {
-    suggestions.push('Aggressive growth strategies?');
-    suggestions.push('Tax-saving investments?');
+    base.push('How much should I invest monthly?');
+    base.push('How do I start a SIP step-by-step?');
   }
 
-  return suggestions.slice(0, 2);
+  if (goal === 'retirement') base.push('Can I retire at 55 with my current numbers?');
+  else if (goal === 'house') base.push('When can I buy a house with my current numbers?');
+  else if (goal === 'education') base.push('How much should I invest for child education?');
+  else base.push('How do I reduce tax while investing?');
+
+  // Keep suggestions within personal finance lane: no vague motivational prompts.
+  return suggestRotate(base, 2);
 }
 
 function buildProfileSummaryLine(session) {
@@ -733,6 +806,42 @@ async function handleCollectPhase(session, userMessage) {
 
   // Deterministic 6-step collection flow for stable testing and UX consistency.
   if (typeof session.currentStep === 'number' && session.currentStep < COLLECTION_STEPS.length) {
+    // If the user asks a genuine finance question mid-collection, answer briefly,
+    // then steer back to the current step (hybrid: standard chat + guided collection).
+    {
+      const step = COLLECTION_STEPS[session.currentStep];
+      const text = String(userMessage || '').trim();
+      const lower = text.toLowerCase();
+      const looksLikeQuestion = /\?/.test(text) || /^(what|how|can|should|when|which|where)\b/i.test(text);
+
+      const looksLikeStepAnswer = (() => {
+        if (!step) return true;
+        if (step.type === 'number') return /\d/.test(text) || /(none|zero|nothing)/i.test(text);
+        if (step.type === 'choice') return (step.choices || []).some(c => lower === c || lower.includes(c));
+        return true;
+      })();
+
+      const financeLike = /(sip|invest|investment|mutual\s*fund|mf\b|fd\b|ppf|nps|emi|loan|tax|retire|retirement|budget|saving|savings|wealth|goal)/i.test(lower);
+
+      if (looksLikeQuestion && financeLike && !looksLikeStepAnswer) {
+        const income = session.profile.monthly_income || session.profile.income || 0;
+        const expenses = Number.isFinite(session.profile.expenses) ? session.profile.expenses : null;
+        const surplus = (income && expenses !== null) ? Math.max(0, income - expenses) : null;
+        const starterSip = (surplus !== null) ? Math.round(surplus * 0.7) : null;
+
+        const quick = starterSip !== null
+          ? `Quick answer: with your current details, a starting SIP could be around ₹${financeService.formatINR(starterSip)}/month (about 70% of your surplus).`
+          : `Quick answer: I can give an accurate SIP/plan once I have income + expenses. As a simple start, many people target investing ~10–20% of take-home, then increase monthly.`;
+
+        return {
+          message: `${quick}\n\nTo personalize this properly, ${step.question}`,
+          phase: 'collect',
+          step: buildStepMeta(session.currentStep),
+          progress: Math.round((session.currentStep / COLLECTION_STEPS.length) * 100),
+        };
+      }
+    }
+
     const profileFromText = extractProfileFromMessage(userMessage, session.profile || {});
     if (profileFromText.monthly_income && !profileFromText.income) profileFromText.income = profileFromText.monthly_income;
     if (profileFromText.current_savings !== undefined && profileFromText.current_savings !== null && (profileFromText.savings === null || profileFromText.savings === undefined)) {
