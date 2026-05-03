@@ -132,12 +132,7 @@ function estimateGoalTimeline(principal, monthly, rate, target) {
 function buildHookLine(gap, opt10, investable, goal) {
   const fmtGap = formatCrLakh(gap);
   const fmtOpt = formatCrLakh(opt10);
-  const lines = [
-    `₹${formatINR(investable)}/month SIP could grow to ₹${fmtOpt} in 10 years — don't leave ₹${fmtGap} behind.`,
-    `Your idle savings are costing you ₹${fmtGap} in lost wealth over 10 years.`,
-    `Investing ₹${formatINR(investable)}/month today unlocks ₹${fmtOpt} by ${new Date().getFullYear() + 10}.`,
-  ];
-  return lines[Math.floor(Math.random() * lines.length)];
+  return `₹${formatINR(investable)}/month SIP could grow to ₹${fmtOpt} in 10 years — don't leave ₹${fmtGap} behind.`;
 }
 
 function buildInsights(profile, surplus, investable, opt10, cur10, yearsToRetire) {

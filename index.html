@@ -211,6 +211,108 @@ function addElement(el) {
   scrollToBottom();
 }
 
+function buildLineGrowthCard(visual) {
+  const wrap = document.createElement('div');
+  wrap.className = 'msg bot';
+  wrap.style.cssText = 'max-width:100%;width:100%';
+
+  const card = document.createElement('div');
+  card.className = 'growth-analysis-card';
+  const chartId = `lineGrowth_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+  const expected = visual.highlights?.expected_growth_10yr || 0;
+  const uplift = visual.highlights?.improvement_over_current_10yr || 0;
+
+  card.innerHTML = `
+    <div style="font-family:'Outfit',sans-serif;font-weight:700;margin-bottom:0.8rem;font-size:0.95rem">
+      📈 Expected Growth Summary
+    </div>
+    <div class="growth-chart-wrap">
+      <canvas id="${chartId}" aria-label="Expected growth line graph" role="img" style="max-height:250px"></canvas>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.75rem;margin-top:1rem;font-size:0.78rem">
+      <div style="padding:0.75rem;background:rgba(34,197,94,0.08);border-radius:8px;border-left:3px solid #22c55e">
+        <div style="color:var(--text-muted);font-weight:600;margin-bottom:0.3rem">Expected 10Y Growth</div>
+        <div style="font-weight:700;color:#22c55e;font-size:0.9rem">${formatCrLakh(expected)}</div>
+      </div>
+      <div style="padding:0.75rem;background:rgba(245,197,24,0.08);border-radius:8px;border-left:3px solid #f5c518">
+        <div style="color:var(--text-muted);font-weight:600;margin-bottom:0.3rem">Extra vs Current Path</div>
+        <div style="font-weight:700;color:#f5c518;font-size:0.9rem">${formatCrLakh(uplift)}</div>
+      </div>
+    </div>
+  `;
+
+  wrap.appendChild(card);
+
+  requestAnimationFrame(() => {
+    const canvas = document.getElementById(chartId);
+    if (!canvas || typeof Chart === 'undefined') return;
+    const labels = visual.labels || [];
+    const series = Array.isArray(visual.series) ? visual.series : [];
+    if (series.length < 2) return;
+
+    const isDark = document.documentElement.getAttribute('data-theme') !== 'light';
+    const textColor = isDark ? 'rgba(240,242,250,0.6)' : 'rgba(18,21,31,0.6)';
+    const gridColor = isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.05)';
+
+    new Chart(canvas, {
+      type: 'line',
+      data: {
+        labels,
+        datasets: [
+          {
+            label: series[0].name || 'Current Path',
+            data: series[0].values || [],
+            borderColor: '#4b5280',
+            backgroundColor: 'rgba(75,82,128,0.06)',
+            fill: true,
+            tension: 0.35,
+            borderWidth: 2,
+            pointRadius: 3
+          },
+          {
+            label: series[1].name || 'Optimized Path',
+            data: series[1].values || [],
+            borderColor: '#22c55e',
+            backgroundColor: 'rgba(34,197,94,0.10)',
+            fill: true,
+            tension: 0.35,
+            borderWidth: 2.5,
+            pointRadius: 3
+          }
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: true,
+        plugins: {
+          legend: { position: 'top', labels: { color: textColor, usePointStyle: true, font: { size: 11 } } },
+          tooltip: {
+            backgroundColor: 'rgba(5,7,15,0.9)',
+            borderColor: 'rgba(245,197,24,0.25)',
+            borderWidth: 1,
+            titleColor: '#f5c518',
+            bodyColor: 'rgba(240,242,250,0.8)',
+            callbacks: { label: ctx => ` ${formatCrLakh(ctx.raw)}` }
+          }
+        },
+        scales: {
+          x: { grid: { color: gridColor }, ticks: { color: textColor, font: { size: 10 } } },
+          y: {
+            grid: { color: gridColor },
+            ticks: {
+              color: textColor,
+              font: { size: 10 },
+              callback: v => v >= 1e7 ? `₹${(v / 1e7).toFixed(1)}Cr` : v >= 1e5 ? `₹${(v / 1e5).toFixed(0)}L` : `₹${formatINR(v)}`
+            }
+          }
+        }
+      }
+    });
+  });
+
+  return wrap;
+}
+
 // ─── Enrichment UI (insight + visual + suggested questions) ─────────────────
 function buildSnapshotCard(data) {
   const wrap = document.createElement('div');
@@ -237,89 +339,11 @@ function buildSnapshotCard(data) {
     card.appendChild(insight);
   }
 
-  // Tiny potential chart (Current vs Optimized 5y)
-  if (data.visual && data.visual.projection && Array.isArray(data.visual.projection.labels) && Array.isArray(data.visual.projection.values)) {
-    const chartWrap = document.createElement('div');
-    chartWrap.className = 'mini-chart-wrap';
-    const id = `miniChart_${(globalThis.crypto && crypto.randomUUID) ? crypto.randomUUID() : (Date.now() + '_' + Math.random().toString(16).slice(2))}`;
-    chartWrap.innerHTML = `<canvas id="${id}" aria-label="Potential chart" role="img"></canvas>`;
-    card.appendChild(chartWrap);
-
-    requestAnimationFrame(() => {
-      const canvas = document.getElementById(id);
-      if (!canvas || typeof Chart === 'undefined') return;
-      const isDark = document.documentElement.getAttribute('data-theme') !== 'light';
-      const textColor = isDark ? 'rgba(240,242,250,0.65)' : 'rgba(18,21,31,0.6)';
-      const gridColor = isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.05)';
-
-      new Chart(canvas, {
-        type: 'bar',
-        data: {
-          labels: data.visual.projection.labels,
-          datasets: [{
-            data: data.visual.projection.values,
-            backgroundColor: ['rgba(75,82,128,0.30)', 'rgba(34,197,94,0.30)'],
-            borderColor: ['#4b5280', '#22c55e'],
-            borderWidth: 1.2,
-            borderRadius: 10,
-          }]
-        },
-        options: {
-          responsive: true,
-          maintainAspectRatio: false,
-          plugins: {
-            legend: { display: false },
-            tooltip: {
-              backgroundColor: 'rgba(5,7,15,0.92)',
-              borderColor: 'rgba(245,197,24,0.25)',
-              borderWidth: 1,
-              titleColor: '#f5c518',
-              bodyColor: 'rgba(240,242,250,0.85)',
-              callbacks: { label: ctx => ` ${formatCrLakh(ctx.raw)}` }
-            }
-          },
-          scales: {
-            x: { grid: { display: false }, ticks: { color: textColor, font: { size: 10, weight: '600' } } },
-            y: { grid: { color: gridColor }, ticks: { display: false }, border: { display: false } }
-          }
-        }
-      });
-    });
-  }
-
-  // Compact micro-bars for key numbers
-  if (data.visual && data.visual.kind === 'simple_bar' && Array.isArray(data.visual.labels) && Array.isArray(data.visual.values)) {
-    const labels = data.visual.labels;
-    const values = data.visual.values;
-    const formatted = data.visual.formatted || {};
-
-    const max = Math.max(0, ...values.map(v => (typeof v === 'number' && isFinite(v)) ? v : 0));
-    const list = document.createElement('div');
-    list.className = 'bar-list compact';
-
-    labels.forEach((label, idx) => {
-      const raw = values[idx];
-      const val = (typeof raw === 'number' && isFinite(raw)) ? raw : 0;
-      const width = max > 0 ? Math.max(2, Math.round((val / max) * 100)) : 0;
-
-      const row = document.createElement('div');
-      row.className = 'bar-row compact';
-      row.innerHTML = `
-        <div class="bar-label">${escapeHtml(label)}</div>
-        <div class="bar-track" aria-hidden="true"><div class="bar-fill" style="width:${width}%"></div></div>
-        <div class="bar-value">${escapeHtml(formatted[label] || `₹${formatINR(val)}`)}</div>
-      `;
-      list.appendChild(row);
-    });
-
-    card.appendChild(list);
-  }
-
-  // Suggested questions (actionable, outputs)
+  // Suggested questions (MAX 2, not 5)
   if (Array.isArray(data.suggestedQuestions) && data.suggestedQuestions.length) {
     const row = document.createElement('div');
     row.className = 'suggestion-row compact';
-    data.suggestedQuestions.slice(0, 5).forEach(q => {
+    data.suggestedQuestions.slice(0, 2).forEach(q => {
       const chip = document.createElement('button');
       chip.className = 'suggestion-chip';
       chip.type = 'button';
@@ -453,8 +477,13 @@ function handleResponse(data) {
   if (data.message) addBotMessage(data.message);
 
   // Add visuals + insight + suggested questions
-  if (data.insight || data.visual || (Array.isArray(data.suggestedQuestions) && data.suggestedQuestions.length)) {
+  if (data.insight || (Array.isArray(data.suggestedQuestions) && data.suggestedQuestions.length)) {
     addElement(buildSnapshotCard(data));
+  }
+
+  // Show growth line graph only when backend provides it.
+  if (data.visual && data.visual.kind === 'line_growth') {
+    addElement(buildLineGrowthCard(data.visual));
   }
 
   // Auto-show advisor card if backend requests it
@@ -490,27 +519,16 @@ function renderAnalysis(a, profile) {
   // 1. Chart card
   addElement(buildChartCard(p, a.investable_amount, profile));
 
-  // 2. Insights
+  // 2. Clean summary card (replaces noisy multi-card blocks)
   setTimeout(() => {
-    addBotMessage('🔍 **3 insights specific to your profile:**');
-    setTimeout(() => {
-      addElement(buildInsights(a.insights));
-
-      // 3. Gap banner
-      setTimeout(() => {
-        addElement(buildGapBanner(a));
-
-        // 4. Locked section
-        setTimeout(() => {
-          addElement(buildLockedSection(a));
-
-          // 5. Hook CTA
-          setTimeout(() => {
-            addElement(buildHookCTA(a, profile));
-          }, 400);
-        }, 300);
-      }, 300);
-    }, 200);
+    addBotMessage(
+      `Quick view:\n` +
+      `• Monthly SIP target: ₹${formatINR(a.investable_amount || 0)}\n` +
+      `• 10Y optimized value: ${formatCrLakh(p.optimized_10yr || 0)}\n` +
+      `• Wealth improvement vs current path: ${formatCrLakh(a.wealth_gap || 0)}\n\n` +
+      `For exact fund selection and allocation, connect with Piyush (CFP).`
+    );
+    setTimeout(() => addElement(buildHookCTA(a, profile)), 300);
   }, 600);
 }
 
@@ -652,6 +670,142 @@ function buildGapBanner(a) {
         Key risk: ${escapeHtml(a.key_risk || 'Inflation erosion on idle savings')}.
       </div>
     </div>`;
+  return wrap;
+}
+
+// ─── Growth Analysis (10-Year Timeline) ────────────────────
+function buildGrowthAnalysis(projections, analysis) {
+  const wrap = document.createElement('div');
+  wrap.className = 'msg bot';
+  wrap.style.cssText = 'max-width:100%;width:100%';
+
+  const card = document.createElement('div');
+  card.className = 'growth-analysis-card';
+
+  // Title
+  const title = document.createElement('div');
+  title.style.cssText = 'font-family:"Outfit",sans-serif;font-weight:700;margin-bottom:1rem;font-size:0.95rem';
+  title.innerHTML = '📊 <strong>10-Year Growth Trajectory</strong>';
+  card.appendChild(title);
+
+  // Growth chart
+  const chartWrap = document.createElement('div');
+  chartWrap.className = 'growth-chart-wrap';
+  const chartId = `growthChart_${Date.now()}`;
+  chartWrap.innerHTML = `<canvas id="${chartId}" aria-label="10-year growth chart" role="img" style="max-height:250px"></canvas>`;
+  card.appendChild(chartWrap);
+
+  // Key metrics
+  const metricsDiv = document.createElement('div');
+  metricsDiv.style.cssText = 'display:grid;grid-template-columns:1fr 1fr 1fr;gap:0.75rem;margin-top:1rem;font-size:0.75rem';
+  
+  const totalGrowth = projections.optimized_10yr - (analysis.monthly_surplus ? analysis.monthly_surplus * 120 : 0);
+  const annualGrowthRate = ((Math.pow(projections.optimized_10yr / 1, 1/10) - 1) * 100).toFixed(1);
+  
+  metricsDiv.innerHTML = `
+    <div style="padding:0.75rem;background:rgba(34,197,94,0.08);border-radius:8px;border-left:3px solid #22c55e">
+      <div style="color:var(--text-muted);font-weight:600;margin-bottom:0.3rem">Total Growth</div>
+      <div style="font-weight:700;color:#22c55e;font-size:0.9rem">${formatCrLakh(projections.optimized_10yr - (analysis.current_savings || 0))}</div>
+    </div>
+    <div style="padding:0.75rem;background:rgba(245,197,24,0.08);border-radius:8px;border-left:3px solid #f5c518">
+      <div style="color:var(--text-muted);font-weight:600;margin-bottom:0.3rem">Avg Annual Growth</div>
+      <div style="font-weight:700;color:#f5c518;font-size:0.9rem">${annualGrowthRate}% p.a.</div>
+    </div>
+    <div style="padding:0.75rem;background:rgba(75,82,128,0.08);border-radius:8px;border-left:3px solid #4b5280">
+      <div style="color:var(--text-muted);font-weight:600;margin-bottom:0.3rem">10Y Target</div>
+      <div style="font-weight:700;color:#4b5280;font-size:0.9rem">${formatCrLakh(projections.optimized_10yr)}</div>
+    </div>
+  `;
+  card.appendChild(metricsDiv);
+
+  wrap.appendChild(card);
+
+  // Render chart on next frame
+  requestAnimationFrame(() => {
+    const canvas = document.getElementById(chartId);
+    if (!canvas || typeof Chart === 'undefined') return;
+
+    const isDark = document.documentElement.getAttribute('data-theme') !== 'light';
+    const textColor = isDark ? 'rgba(240, 242, 250, 0.6)' : 'rgba(18, 21, 31, 0.6)';
+    const gridColor = isDark ? 'rgba(255, 255, 255, 0.04)' : 'rgba(0, 0, 0, 0.05)';
+
+    // Generate 10-year data points with realistic growth
+    const years = [];
+    const optimizedData = [];
+    const currentData = [];
+    for (let yr = 0; yr <= 10; yr++) {
+      years.push(`Year ${yr}`);
+      // Simplified compound growth
+      const rate = 0.12; // moderate rate
+      optimizedData.push(Math.round((analysis.current_savings || 0) * Math.pow(1 + rate, yr) + (analysis.investable_amount || 0) * 12 * yr));
+      currentData.push(Math.round((analysis.current_savings || 0) * Math.pow(1.06, yr)));
+    }
+
+    new Chart(canvas, {
+      type: 'line',
+      data: {
+        labels: years,
+        datasets: [
+          {
+            label: 'Current Path (FD)',
+            data: currentData,
+            borderColor: '#4b5280',
+            backgroundColor: 'rgba(75, 82, 128, 0.05)',
+            tension: 0.4,
+            fill: true,
+            pointRadius: 2,
+            pointBackgroundColor: '#4b5280',
+            borderWidth: 2
+          },
+          {
+            label: 'Optimized Path (SIP)',
+            data: optimizedData,
+            borderColor: '#22c55e',
+            backgroundColor: 'rgba(34, 197, 94, 0.1)',
+            tension: 0.4,
+            fill: true,
+            pointRadius: 2,
+            pointBackgroundColor: '#22c55e',
+            borderWidth: 3
+          }
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: true,
+        plugins: {
+          legend: {
+            position: 'top',
+            labels: { color: textColor, usePointStyle: true, font: { size: 11, weight: '600' } }
+          },
+          tooltip: {
+            backgroundColor: 'rgba(5, 7, 15, 0.9)',
+            borderColor: 'rgba(245, 197, 24, 0.25)',
+            borderWidth: 1,
+            titleColor: '#f5c518',
+            bodyColor: 'rgba(240, 242, 250, 0.8)',
+            callbacks: { label: ctx => ` ${formatCrLakh(ctx.raw)}` }
+          }
+        },
+        scales: {
+          x: {
+            grid: { color: gridColor },
+            ticks: { color: textColor, font: { size: 10 }, callback: val => val.replace('Year ', 'Y') }
+          },
+          y: {
+            grid: { color: gridColor },
+            ticks: {
+              color: textColor,
+              font: { size: 10 },
+              callback: v => v >= 1e7 ? `₹${(v / 1e7).toFixed(1)}Cr` : v >= 1e5 ? `₹${(v / 1e5).toFixed(0)}L` : `₹${formatINR(v)}`
+            }
+          }
+        },
+        interaction: { intersect: false, mode: 'index' }
+      }
+    });
+  });
+
   return wrap;
 }
 

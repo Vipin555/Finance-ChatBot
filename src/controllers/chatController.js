@@ -23,8 +23,9 @@ function extractProfileFromMessage(text, existing) {
   const updated = Object.assign({}, existing || {});
   const t = String(text || '').toLowerCase();
 
-  // Income patterns (rough)
-  const incomeMatch = text.match(/(?:₹\s*)?(\d[\d,]*(?:\.\d+)?)(?:\s*(lakh|lakhs|l|L|k|K|k\b))?(?:\s*(?:per month|\/month|a month|monthly))?/i);
+  // Income patterns (rough) — require income/earn context to avoid capturing age.
+  const incomeMatch = text.match(/(?:income|salary|earn|earning|take[\s-]?home)[^\d]*(?:₹\s*)?(\d[\d,]*(?:\.\d+)?)(?:\s*(lakh|lakhs|l|k|cr|crore))?/i)
+    || text.match(/(?:₹\s*)?(\d[\d,]*(?:\.\d+)?)(?:\s*(lakh|lakhs|l|k|cr|crore))?\s*(?:per month|\/month|monthly)\b/i);
   if (incomeMatch && !updated.income && !updated.monthly_income) {
     let val = parseFloat(incomeMatch[1].replace(/,/g, ''));
     const unit = (incomeMatch[2] || '').toLowerCase();
@@ -49,6 +50,18 @@ function extractProfileFromMessage(text, existing) {
     else if (unit.includes('k')) val *= 1000;
     else if (unit.includes('cr') || unit.includes('crore')) val *= 10000000;
     if (val >= 0) updated.current_savings = Math.round(val);
+  }
+
+  // Expenses
+  const expenseMatch = text.match(/(?:expense|expenses|spend|spending|outgo|outgoing)\D{0,24}(?:₹\s*)?(\d[\d,]*(?:\.\d+)?)(?:\s*(lakh|k|cr|crore))?/i)
+    || text.match(/(?:₹\s*)?(\d[\d,]*(?:\.\d+)?)(?:\s*(lakh|k|cr|crore))?\s*(?:as|for|in)?\s*(?:expense|expenses|spend|spending)\b/i);
+  if (expenseMatch && (updated.expenses === undefined || updated.expenses === null)) {
+    let val = parseFloat(expenseMatch[1].replace(/,/g, ''));
+    const unit = (expenseMatch[2] || '').toLowerCase();
+    if (unit.includes('l')) val *= 100000;
+    else if (unit.includes('k')) val *= 1000;
+    else if (unit.includes('cr') || unit.includes('crore')) val *= 10000000;
+    if (val >= 0) updated.expenses = Math.round(val);
   }
 
   // Risk appetite
@@ -182,7 +195,11 @@ const COLLECTION_STEPS = [
     reprompt:    "Your net monthly salary or business income in ₹ — e.g. 75000",
     type:        'number',
     validate:    v => financeService.validateProfileField('income', v),
-    parse:       v => parseFloat(v.replace(/[^\d.]/g, '')),
+    parse:       v => {
+      const amount = parseAmountINR(v);
+      if (amount !== null) return amount;
+      return parseFloat(String(v).replace(/[^\d.]/g, ''));
+    },
     hint:        'Monthly income in ₹',
   },
   {
@@ -191,7 +208,11 @@ const COLLECTION_STEPS = [
     reprompt:    "Total monthly outgoings in ₹ — include all regular expenses.",
     type:        'number',
     validate:    v => financeService.validateProfileField('expenses', v),
-    parse:       v => parseFloat(v.replace(/[^\d.]/g, '')),
+    parse:       v => {
+      const amount = parseAmountINR(v);
+      if (amount !== null) return amount;
+      return parseFloat(String(v).replace(/[^\d.]/g, ''));
+    },
     hint:        'Monthly expenses in ₹',
   },
   {
@@ -200,7 +221,11 @@ const COLLECTION_STEPS = [
     reprompt:    "Total liquid savings in ₹ — this can be 0 if you're starting fresh.",
     type:        'number',
     validate:    v => financeService.validateProfileField('savings', v),
-    parse:       v => parseFloat(v.replace(/[^\d.]/g, '')),
+    parse:       v => {
+      const amount = parseAmountINR(v);
+      if (amount !== null) return amount;
+      return parseFloat(String(v).replace(/[^\d.]/g, ''));
+    },
     hint:        'Total savings in ₹',
   },
   {
@@ -271,15 +296,15 @@ async function startSession(req, res) {
     const { userId, name } = req.body;
     const session = sessionStore.createNewSession(userId, name);
 
-    // Conversational opener — friendly, human tone
-    const firstQuestion = "Hey — what's got you thinking about money today?";
+    // Keep a deterministic first step so API tests and UI stay consistent.
+    const firstQuestion = COLLECTION_STEPS[0].question;
     sessionStore.addMessage(session.id, 'assistant', firstQuestion);
 
     return res.json({
       sessionId: session.id,
       message:   firstQuestion,
       phase:     'collect',
-      step:      null,
+      step:      buildStepMeta(0),
       progress:  0,
       insight:   generateSimpleInsight(session, { message: firstQuestion, phase: 'collect' }),
       suggestedQuestions: generateSuggestedQuestions(session),
@@ -334,11 +359,14 @@ async function handleMessage(req, res) {
 
     // Enrich response with simple insight, suggested questions, and a small visual payload
     try {
+      if (!response.analysis && session.analysis) response.analysis = session.analysis;
+      if (!response.profile && session.profile) response.profile = session.profile;
       response.insight = generateSimpleInsight(session, response);
       response.suggestedQuestions = generateSuggestedQuestions(session);
-      response.visual = makeVisualData(session, response);
+      if (!response.visual) response.visual = makeVisualData(session, response);
       response.summaryLine = buildProfileSummaryLine(session);
-      response.hookLine = buildHookLine(session, response);
+      const personalNudge = buildPersonalizedNudge(session);
+      response.hookLine = `${buildHookLine(session, response)} ${personalNudge}`.trim();
     } catch (e) {
       console.warn('[response-enrich]', e && e.message);
     }
@@ -384,22 +412,33 @@ function generateSuggestedQuestions(session) {
   const profile = session.profile || {};
   const goal = profile.goal || 'wealth';
   const income = profile.monthly_income || profile.income;
-  const suggestions = [
-    'Show my quick snapshot',
-    'Show a 5-year projection',
-    'How much can I invest monthly?',
-    `Give me 3 quick wins for ${goal}`,
-    'What should I do this month?',
-    'Connect me with advisor Piyush',
-  ];
-
-  // If user hasn’t shared income yet, add a prompt that still “works” (asks for baseline)
+  // Suggest max 2 related questions based on phase
   if (!income) {
-    suggestions.unshift('I earn 50k/month — show my baseline');
+    return ['I earn 50k/month', 'No specific income yet'];
   }
 
-  // Keep it short to reduce UI space
-  return Array.from(new Set(suggestions)).slice(0, 5);
+  const analysis = session.analysis;
+  if (!analysis) {
+    return ['Show me my potential', 'How to start investing?'];
+  }
+
+  // After analysis - goal-based suggestions
+  const suggestions = [];
+  if (goal === 'retirement') {
+    suggestions.push('Can I retire at 55?');
+    suggestions.push('What about early retirement?');
+  } else if (goal === 'house') {
+    suggestions.push('When can I buy a house?');
+    suggestions.push('Home loan options?');
+  } else if (goal === 'education') {
+    suggestions.push('Education plan timeline?');
+    suggestions.push('Best education funds?');
+  } else {
+    suggestions.push('Aggressive growth strategies?');
+    suggestions.push('Tax-saving investments?');
+  }
+
+  return suggestions.slice(0, 2);
 }
 
 function buildProfileSummaryLine(session) {
@@ -416,15 +455,186 @@ function buildProfileSummaryLine(session) {
 function buildHookLine(session, responseObj) {
   const profile = session.profile || {};
   const income = profile.monthly_income || profile.income || 0;
+  const expenses = Number.isFinite(profile.expenses) ? profile.expenses : null;
+  const age = profile.age || null;
+  const surplus = (expenses === null) ? null : Math.max(0, income - expenses);
   const analysis = responseObj.analysis || session.analysis || null;
 
   if (analysis && analysis.projections && Number.isFinite(analysis.projections.optimized_5yr) && Number.isFinite(analysis.investable_amount)) {
     return `Hook: a 30‑min plan with Piyush can help you turn ~₹${financeService.formatINR(analysis.investable_amount)}/mo into ${financeService.formatCrLakh(analysis.projections.optimized_5yr)} in 5 years.`;
   }
+  if (income && surplus !== null && age) {
+    const suggested = Math.round(surplus * 0.7);
+    return `Hook: at age ${age}, investing ~₹${financeService.formatINR(suggested)}/month from your ₹${financeService.formatINR(surplus)} surplus can create a strong 5-year base; Piyush can personalize it.`;
+  }
+  if (income && surplus !== null) {
+    return `Hook: your current surplus is ~₹${financeService.formatINR(surplus)}/month — I can turn this into a realistic 5-year wealth path.`;
+  }
   if (income) {
-    return 'Hook: share expenses + savings and I’ll quantify your 5‑year wealth potential (then Piyush can validate the plan).';
+    return `Hook: with ₹${financeService.formatINR(income)}/month income, share expenses and I’ll quantify your 5-year potential instantly.`;
   }
   return 'Hook: share your monthly income to see a baseline instantly.';
+}
+
+function buildPersonalizedNudge(session) {
+  const p = session.profile || {};
+  const age = p.age;
+  const income = p.monthly_income || p.income || 0;
+  const expenses = Number.isFinite(p.expenses) ? p.expenses : null;
+  const monthly = (expenses === null) ? null : Math.max(0, income - expenses);
+  const analysis = session.analysis || null;
+
+  if (age && analysis && analysis.projections && Number.isFinite(analysis.projections.optimized_10yr)) {
+    const years = Math.max(5, 60 - age);
+    return `Personal tip: at age ${age}, a steady SIP can build strong wealth over ${years}+ years. Stay consistent month by month.`;
+  }
+  if (age && monthly !== null) {
+    return `Personal tip: you are ${age}. If you invest even ₹${financeService.formatINR(Math.round(monthly * 0.6))}/month consistently, your long-term growth can improve a lot.`;
+  }
+  if (income > 0) {
+    return `Personal tip: with ₹${financeService.formatINR(income)}/month income, start with a fixed SIP date and automate it.`;
+  }
+  return 'Personal tip: share one clear number (income or savings) and I will give a customized growth path.';
+}
+
+function buildDiversificationText(session) {
+  const p = session.profile || {};
+  const risk = p.risk || 'moderate';
+  const goal = p.goal || 'wealth';
+  if (risk === 'conservative') {
+    return `Diversification idea: 35% liquid/ultra-short funds, 25% FD/RD, 15% Gold ETF, 25% Index funds.`;
+  }
+  if (risk === 'aggressive') {
+    return `Diversification idea: 15% liquid funds, 10% Gold ETF, 55% Index funds, 20% flexi/mid-cap funds.`;
+  }
+  return `Diversification idea: 20% liquid funds, 15% Gold ETF, 45% Index funds, 20% FD/short debt (${goal} aligned).`;
+}
+
+function buildAdvisorContactLine() {
+  return 'Advisor contact: Piyush Tembhekar (CFP) — WhatsApp +91 98765 43210.';
+}
+
+function isSpecificInvestmentAdviceQuery(message) {
+  const t = String(message || '').toLowerCase();
+  return /(which\s+mutual\s+fund|suggest\s+.*fund|suggest\s+.*amc|best\s+fund|fund\s+name|which\s+amc|stock\s+tip|buy\s+now)/i.test(t);
+}
+
+function parseGoalPlanQuestion(message) {
+  const text = String(message || '');
+  const lower = text.toLowerCase();
+  if (!/(grow|reach|target|goal|achieve)/i.test(lower)) return null;
+  if (!/(month|months|yr|year|years)/i.test(lower)) return null;
+
+  const amounts = [...text.matchAll(/(?:₹\s*)?(\d[\d,]*(?:\.\d+)?)(?:\s*(k|l|lakh|lakhs|cr|crore))?/gi)]
+    .map(m => {
+      let val = parseFloat(String(m[1]).replace(/,/g, ''));
+      const unit = String(m[2] || '').toLowerCase();
+      if (unit === 'k') val *= 1000;
+      if (unit === 'l' || unit === 'lakh' || unit === 'lakhs') val *= 100000;
+      if (unit === 'cr' || unit === 'crore') val *= 10000000;
+      return Number.isFinite(val) ? Math.round(val) : null;
+    })
+    .filter(v => Number.isFinite(v));
+  if (!amounts.length) return null;
+
+  const monthsMatch = lower.match(/(\d{1,3})\s*(month|months)/i);
+  const yearsMatch = lower.match(/(\d{1,2})\s*(year|years|yr|yrs)/i);
+  const months = monthsMatch ? parseInt(monthsMatch[1], 10) : (yearsMatch ? parseInt(yearsMatch[1], 10) * 12 : null);
+  if (!months || months <= 0) return null;
+
+  const targetMatch = text.match(/(?:to|reach|target|goal)\s*(?:₹\s*)?(\d[\d,]*(?:\.\d+)?)(?:\s*(k|l|lakh|lakhs|cr|crore))?/i);
+  let target = null;
+  if (targetMatch) {
+    target = parseAmountINR(`${targetMatch[1]} ${targetMatch[2] || ''}`.trim());
+  }
+  if (!target) {
+    // Fallback: choose the largest monetary value, avoiding month/year count.
+    target = amounts.length ? Math.max(...amounts) : null;
+  }
+  if (!target || target <= 0) return null;
+
+  return { target, months };
+}
+
+function solveRequiredMonthlyForTarget(target, months, annualRate, principal = 0) {
+  const mr = annualRate / 12;
+  const factor = ((Math.pow(1 + mr, months) - 1) / mr) * (1 + mr);
+  const principalGrowth = principal * Math.pow(1 + annualRate, months / 12);
+  const need = Math.max(0, target - principalGrowth);
+  return factor > 0 ? Math.ceil(need / factor) : Math.ceil(need / months);
+}
+
+function buildGoalPlannerAnswer(session, userMessage) {
+  const parsed = parseGoalPlanQuestion(userMessage);
+  if (!parsed) return null;
+  const p = session.profile || {};
+  const income = p.monthly_income || p.income || 0;
+  const expenses = Number.isFinite(p.expenses) ? p.expenses : 0;
+  const savings = p.current_savings || p.savings || 0;
+  const surplus = Math.max(0, income - expenses);
+  const target = parsed.target;
+  const months = parsed.months;
+
+  const reqConservative = solveRequiredMonthlyForTarget(target, months, 0.08, savings);
+  const reqModerate = solveRequiredMonthlyForTarget(target, months, 0.12, savings);
+
+  const realistic = surplus >= reqConservative;
+  const status = realistic
+    ? `This target is realistic with your current cash flow.`
+    : `This target is tight with current cash flow. You may need extra income or longer timeline.`;
+
+  return [
+    `Goal check: to reach ₹${financeService.formatINR(target)} in ${months} months, you need about ₹${financeService.formatINR(reqConservative)} to ₹${financeService.formatINR(reqModerate)}/month invested.`,
+    `Your current monthly surplus is about ₹${financeService.formatINR(surplus)}.`,
+    status,
+    buildDiversificationText(session),
+    buildAdvisorContactLine(),
+  ].join('\n');
+}
+
+function makeGrowthLineData(session, responseObj) {
+  const profile = session.profile || {};
+  const analysis = responseObj.analysis || session.analysis || null;
+  if (!analysis || !analysis.projections) return null;
+
+  const p = analysis.projections;
+  const start = profile.current_savings || profile.savings || 0;
+  const current5 = Number.isFinite(p.current_5yr) ? p.current_5yr : null;
+  const optimized5 = Number.isFinite(p.optimized_5yr) ? p.optimized_5yr : null;
+  const current10 = Number.isFinite(p.current_10yr) ? p.current_10yr : null;
+  const optimized10 = Number.isFinite(p.optimized_10yr) ? p.optimized_10yr : null;
+  if ([current5, optimized5, current10, optimized10].some(v => v === null)) return null;
+
+  return {
+    kind: 'line_growth',
+    labels: ['Now', 'Year 5', 'Year 10'],
+    series: [
+      { name: 'Current Path', values: [start, current5, current10] },
+      { name: 'Optimized Path', values: [start, optimized5, optimized10] },
+    ],
+    highlights: {
+      expected_growth_10yr: optimized10 - start,
+      improvement_over_current_10yr: optimized10 - current10,
+    },
+  };
+}
+
+function buildEndAnalysisLine(session, responseObj) {
+  const analysis = responseObj.analysis || session.analysis || null;
+  if (!analysis || !analysis.projections) return '';
+
+  const p = analysis.projections;
+  if (!Number.isFinite(p.optimized_10yr) || !Number.isFinite(p.current_10yr)) return '';
+  const delta = Math.max(0, p.optimized_10yr - p.current_10yr);
+  const investable = Number.isFinite(analysis.investable_amount) ? analysis.investable_amount : null;
+
+  return (
+    `\n\nEnd summary:\n` +
+    `- Expected 10-year value (optimized): ${financeService.formatCrLakh(p.optimized_10yr)}\n` +
+    `- Current-path 10-year value: ${financeService.formatCrLakh(p.current_10yr)}\n` +
+    `- Additional growth possible: ${financeService.formatCrLakh(delta)}` +
+    (investable !== null ? `\n- Suggested monthly SIP: ₹${financeService.formatINR(investable)}` : '')
+  );
 }
 
 function makeVisualData(session, responseObj) {
@@ -497,6 +707,123 @@ async function handleCollectPhase(session, userMessage) {
     };
   }
 
+  // Handle dynamic target questions even during collection (natural mixed inputs).
+  const collected = extractProfileFromMessage(userMessage, session.profile || {});
+  if (collected.monthly_income && !collected.income) collected.income = collected.monthly_income;
+  if (collected.current_savings !== undefined && collected.current_savings !== null && (collected.savings === null || collected.savings === undefined)) {
+    collected.savings = collected.current_savings;
+  }
+  session.profile = collected;
+  sessionStore.updateSession(session.id, { profile: session.profile, message_count: session.message_count });
+
+  const collectGoalPlan = buildGoalPlannerAnswer(session, userMessage);
+  if (collectGoalPlan) {
+    const hasAge = !!session.profile.age;
+    const hasIncome = !!(session.profile.income || session.profile.monthly_income);
+    const hasExpenses = (session.profile.expenses || session.profile.expenses === 0);
+    const nextAsk = !hasAge ? 'What is your age?' : !hasIncome ? 'What is your monthly income?' : !hasExpenses ? 'What are your monthly expenses?' : 'What is your risk style: conservative, moderate, or aggressive?';
+    return {
+      message: `${collectGoalPlan}\n\nTo personalize this more, ${nextAsk}`,
+      phase: 'collect',
+      step: buildStepMeta(session.currentStep || 0),
+      progress: Math.round((Object.keys(session.profile || {}).length / 6) * 100),
+      visual: makeGrowthLineData(session, {}),
+    };
+  }
+
+  // Deterministic 6-step collection flow for stable testing and UX consistency.
+  if (typeof session.currentStep === 'number' && session.currentStep < COLLECTION_STEPS.length) {
+    const profileFromText = extractProfileFromMessage(userMessage, session.profile || {});
+    if (profileFromText.monthly_income && !profileFromText.income) profileFromText.income = profileFromText.monthly_income;
+    if (profileFromText.current_savings !== undefined && profileFromText.current_savings !== null && (profileFromText.savings === null || profileFromText.savings === undefined)) {
+      profileFromText.savings = profileFromText.current_savings;
+    }
+
+    const readStepValue = (field, profile) => {
+      if (field === 'income') return profile.income || profile.monthly_income;
+      if (field === 'savings') return (profile.savings !== undefined && profile.savings !== null) ? profile.savings : profile.current_savings;
+      return profile[field];
+    };
+    const writeStepValue = (field, value) => {
+      session.profile[field] = value;
+      if (field === 'income') session.profile.monthly_income = value;
+      if (field === 'savings') session.profile.current_savings = value;
+    };
+
+    let nextStep = session.currentStep;
+    while (nextStep < COLLECTION_STEPS.length) {
+      const prefilled = readStepValue(COLLECTION_STEPS[nextStep].field, profileFromText);
+      if (prefilled === undefined || prefilled === null || prefilled === '') break;
+      writeStepValue(COLLECTION_STEPS[nextStep].field, prefilled);
+      nextStep += 1;
+    }
+
+    // If no auto-fill happened, parse only the current expected step from raw text.
+    if (nextStep === session.currentStep) {
+      const step = COLLECTION_STEPS[session.currentStep];
+      let raw = userMessage.trim();
+
+      if (step.type === 'choice') {
+        const lower = raw.toLowerCase();
+        const match = (step.choices || []).find(c => lower === c || lower.includes(c));
+        if (match) raw = match;
+      } else if (step.type === 'number') {
+        const extracted = readStepValue(step.field, profileFromText);
+        if (extracted !== undefined && extracted !== null) raw = String(extracted);
+      }
+
+      const parsed = step.parse ? step.parse(raw) : raw;
+      const validationValue = (step.type === 'number') ? parsed : raw;
+      const validation = step.validate ? step.validate(validationValue) : { valid: true };
+      if (!validation || validation.valid === false) {
+        return {
+          message: step.reprompt || `Please share ${step.field}.`,
+          phase: 'collect',
+          step: buildStepMeta(session.currentStep),
+          progress: Math.round((session.currentStep / COLLECTION_STEPS.length) * 100),
+        };
+      }
+
+      if (!session.profile) session.profile = {};
+      writeStepValue(step.field, parsed);
+      nextStep = session.currentStep + 1;
+    }
+
+    sessionStore.updateSession(session.id, { profile: session.profile, currentStep: nextStep });
+
+    if (nextStep < COLLECTION_STEPS.length) {
+      return {
+        message: COLLECTION_STEPS[nextStep].question,
+        phase: 'collect',
+        step: buildStepMeta(nextStep),
+        progress: Math.round((nextStep / COLLECTION_STEPS.length) * 100),
+      };
+    }
+
+    const p = {
+      age: session.profile.age || 30,
+      income: session.profile.income || session.profile.monthly_income || 0,
+      expenses: session.profile.expenses || 0,
+      savings: session.profile.savings || session.profile.current_savings || 0,
+      risk: session.profile.risk || 'moderate',
+      goal: session.profile.goal || 'wealth',
+    };
+    const analysis = financeService.generateProjections(p);
+    sessionStore.updateSession(session.id, { analysis, phase: 'hook', flowStage: 'analysis_complete' });
+    const peak = buildPeakInsight(p);
+    session.peak_insight = peak;
+    return {
+      message: `All set! Here's what you need to know:\n\n• Monthly SIP: ₹${financeService.formatINR(analysis.investable_amount)}\n• In 10 years: ₹${financeService.formatCrLakh(analysis.projections.optimized_10yr)}\n• Wealth gap: ₹${financeService.formatCrLakh(analysis.wealth_gap)}\n\n${peak}`,
+      phase: 'hook',
+      step: null,
+      progress: 100,
+      show_advisor_card: true,
+      analysis,
+      profile: session.profile,
+      visual: makeGrowthLineData(session, { analysis }),
+    };
+  }
+
   // Silently extract structured data from user's natural message
   session.profile = extractProfileFromMessage(userMessage, session.profile || {});
   if (session.profile.monthly_income && !session.profile.income) session.profile.income = session.profile.monthly_income;
@@ -512,6 +839,34 @@ async function handleCollectPhase(session, userMessage) {
   const keys = ['age','monthly_income','current_savings','risk','goal'];
   const found = keys.reduce((n,k) => n + (session.profile && (session.profile[k] || session.profile[k] === 0) ? 1 : 0), 0);
   const progress = Math.round((found / keys.length) * 100);
+
+  // If essential inputs are already present, finalize analysis immediately.
+  if (session.profile && session.profile.age && (session.profile.monthly_income || session.profile.income) &&
+      (session.profile.expenses || session.profile.expenses === 0) && session.profile.goal) {
+    const income = session.profile.monthly_income || session.profile.income || 0;
+    const p = {
+      age: session.profile.age,
+      income,
+      expenses: session.profile.expenses,
+      savings: session.profile.current_savings || session.profile.savings || 0,
+      risk: session.profile.risk || 'moderate',
+      goal: session.profile.goal || 'wealth',
+    };
+    const analysis = financeService.generateProjections(p);
+    sessionStore.updateSession(session.id, { analysis, phase: 'hook', flowStage: 'analysis_complete' });
+    const peak = buildPeakInsight(p);
+    session.peak_insight = peak;
+    return {
+      message: `All set! Here's what you need to know:\n\n• Monthly SIP: ₹${financeService.formatINR(analysis.investable_amount)}\n• In 10 years: ₹${financeService.formatCrLakh(analysis.projections.optimized_10yr)}\n• Wealth gap: ₹${financeService.formatCrLakh(analysis.wealth_gap)}\n\n${peak}`,
+      phase: 'hook',
+      step: null,
+      progress: 100,
+      show_advisor_card: true,
+      analysis,
+      profile: session.profile,
+      visual: makeGrowthLineData(session, { analysis }),
+    };
+  }
 
   // OPEN: friendly, human follow-up (asks about duration/emotion)
   // Handle inverted 'income-first' flow using flowStage
@@ -554,21 +909,20 @@ async function handleCollectPhase(session, userMessage) {
     // If user said 'savings' ask for amount
     if (/save|savings|saved/.test(text) && amount === null) {
       sessionStore.updateSession(session.id, { flowStage: 'awaiting_savings_value' });
-      return { message: "Great — roughly how much have you saved so far? (₹)\nExamples: '1.2L', '80000', 'not much'", phase: 'collect', step: null, progress };
+      return { message: "How much have you saved? (Just a number)", phase: 'collect', step: null, progress };
     }
     // If user said 'expenses' ask for amount
     if (/expense|expenses|spend|spent/.test(text) && amount === null) {
       sessionStore.updateSession(session.id, { flowStage: 'awaiting_expenses_value' });
-      return { message: "Okay — what's your total monthly expenses (rent, EMIs, bills)? (₹)\nExamples: '20k', '35000'", phase: 'collect', step: null, progress };
+      return { message: "Total monthly expenses? (Rent, food, bills, etc.)", phase: 'collect', step: null, progress };
     }
-    // If user provided a number, assume it's expenses (common path)
+    // If user provided a number, assume it's expenses
     if (amount !== null) {
       const val = amount;
-      // Heuristic: if number is > income treat as savings? but usually expenses <= income
       session.profile.expenses = val;
       sessionStore.updateSession(session.id, { profile: session.profile, flowStage: 'awaiting_age_and_goal' });
 
-      // Recalculate partial analysis
+      // Update with new expense data
       const income = session.profile.monthly_income || session.profile.income || 0;
       const p = {
         age: session.profile.age || 30,
@@ -579,11 +933,7 @@ async function handleCollectPhase(session, userMessage) {
         goal: session.profile.goal || 'wealth',
       };
       const analysis = financeService.generateProjections(p);
-      const msg = `Nice — recorded monthly expenses of ₹${financeService.formatINR(val)}. Updated snapshot:\n` +
-        `• Investable now: ₹${financeService.formatINR(analysis.investable_amount)}/month\n` +
-        `• Optimized (5yr): ${financeService.formatCrLakh(analysis.projections.optimized_5yr)}\n` +
-        `Next: tell me your age and your focus (short-term vs long-term).\n` +
-        `Examples: "22 short term", "age 30 long term"`;
+      const msg = `Got it. You can invest ₹${financeService.formatINR(analysis.investable_amount)}/month.\n\nNow, how old are you?`;
       return { message: msg, phase: 'collect', step: null, progress: Math.min(50, progress) };
     }
   }
@@ -607,14 +957,10 @@ async function handleCollectPhase(session, userMessage) {
         goal: session.profile.goal || 'wealth',
       };
       const analysis = financeService.generateProjections(p);
-      const msg = `Thanks — updated. Here's the improved view:\n` +
-        `• Investable: ₹${financeService.formatINR(analysis.investable_amount)}/month\n` +
-        `• Optimized (5yr): ${financeService.formatCrLakh(analysis.projections.optimized_5yr)}\n` +
-        `Next: tell me your age and your focus (short-term vs long-term).\n` +
-        `Examples: "22 short term", "age 30 long term"`;
+      const msg = `Good. You can invest ₹${financeService.formatINR(analysis.investable_amount)}/month.\n\nHow old are you?`;
       return { message: msg, phase: 'collect', step: null, progress: Math.min(60, progress) };
     }
-    return { message: "Share a number (e.g. 1.2L, 120000, or 'not much').", phase: 'collect', step: null, progress };
+    return { message: "Just give me a number (like 1,50,000 or 'nothing')", phase: 'collect', step: null, progress };
   }
 
   if (session.flowStage === 'awaiting_age_and_goal') {
@@ -624,24 +970,18 @@ async function handleCollectPhase(session, userMessage) {
 
     const hasAge = !!session.profile.age;
     const hasGoal = !!session.profile.goal;
-    const hasHorizon = !!session.profile.time_horizon;
 
-    // Ask only what is missing to avoid loops
-    if (!hasAge && (!hasGoal || !hasHorizon)) {
-      return { message: "Got it. I still need 2 quick bits: your age and whether this is short-term or long-term.\nExamples: '22 short term', '35 long term retirement'", phase: 'collect', step: null, progress: Math.min(70, progress) };
+    if (!hasAge && !hasGoal) {
+      return { message: "Tell me your age and your main goal (retirement, house, wealth, or education)", phase: 'collect', step: null, progress: Math.min(70, progress) };
     }
     if (!hasAge) {
-      return { message: "Got your goal. What's your age?\nExamples: '22', 'age 34'", phase: 'collect', step: null, progress: Math.min(70, progress) };
+      return { message: "What's your age?", phase: 'collect', step: null, progress: Math.min(70, progress) };
     }
     if (!hasGoal) {
-      return { message: "Got your age. What's the primary goal right now?\nExamples: 'wealth creation', 'buy house', 'car in 3 years', 'retirement'", phase: 'collect', step: null, progress: Math.min(70, progress) };
-    }
-    if (!hasHorizon) {
-      return { message: "And is this a short-term target (next 5 years) or a longer game?\nExamples: 'short term', 'long term'", phase: 'collect', step: null, progress: Math.min(75, progress) };
+      return { message: "What's your main goal? (retirement, house, wealth, or education)", phase: 'collect', step: null, progress: Math.min(70, progress) };
     }
 
-    // Move to investments probe
-    sessionStore.updateSession(session.id, { flowStage: 'awaiting_investments' });
+    // Profile is good enough to produce a stable analysis now.
     const income = session.profile.monthly_income || session.profile.income || 0;
     const p = {
       age: session.profile.age,
@@ -652,12 +992,20 @@ async function handleCollectPhase(session, userMessage) {
       goal: session.profile.goal || 'wealth',
     };
     const analysis = financeService.generateProjections(p);
-    const msg = `Great — at ${session.profile.age}, here's the updated picture:\n` +
-      `• Investable: ₹${financeService.formatINR(analysis.investable_amount)}/month\n` +
-      `• Optimized (5yr): ${financeService.formatCrLakh(analysis.projections.optimized_5yr)}\n` +
-      `What's already working for you? (Any SIPs, FDs, PPF, stocks — just a short note)\n` +
-      `Examples: 'SIP 5k + PPF', 'FD only', 'nothing yet'`;
-    return { message: msg, phase: 'collect', step: null, progress: 80 };
+    sessionStore.updateSession(session.id, { analysis, phase: 'hook', flowStage: 'analysis_complete' });
+    const peak = buildPeakInsight(p);
+    session.peak_insight = peak;
+    const msg = `All set! Here's what you need to know:\n\n• Monthly SIP: ₹${financeService.formatINR(analysis.investable_amount)}\n• In 10 years: ₹${financeService.formatCrLakh(analysis.projections.optimized_10yr)}\n• Wealth gap: ₹${financeService.formatCrLakh(analysis.wealth_gap)}\n\n${peak}`;
+    return {
+      message: msg,
+      phase: 'hook',
+      step: null,
+      progress: 100,
+      show_advisor_card: true,
+      analysis,
+      profile: session.profile,
+      visual: makeGrowthLineData(session, { analysis }),
+    };
   }
 
   if (session.flowStage === 'awaiting_investments') {
@@ -680,26 +1028,32 @@ async function handleCollectPhase(session, userMessage) {
     const peak = buildPeakInsight(p);
     session.peak_insight = peak;
 
-    const msg = `All set — here's your personalised snapshot:\n` +
-      `• Investable: ₹${financeService.formatINR(analysis.investable_amount)}/month\n` +
-      `• Optimized (5yr): ${financeService.formatCrLakh(analysis.projections.optimized_5yr)}\n` +
-      `\n${peak}\n\nI can connect you with Piyush Tembhekar who can build a plan for this. Want me to have him reach out?`;
-    return { message: msg, phase: 'hook', step: null, progress: 100, show_advisor_card: true };
+    const msg = `All set! Here's what you need to know:\n\n• Monthly SIP: ₹${financeService.formatINR(analysis.investable_amount)}\n• In 10 years: ₹${financeService.formatCrLakh(analysis.projections.optimized_10yr)}\n• Wealth gap: ₹${financeService.formatCrLakh(analysis.wealth_gap)}\n\n${peak}`;
+    return {
+      message: msg,
+      phase: 'hook',
+      step: null,
+      progress: 100,
+      show_advisor_card: true,
+      analysis,
+      profile: session.profile,
+      visual: makeGrowthLineData(session, { analysis }),
+    };
   }
 
   // Deterministic non-repetitive fallback prompts
   if (!session.profile.income) {
-    return { message: 'Let me personalise this instantly — what is your monthly take-home income?\nExamples: "50k", "80000"', phase: 'collect', step: null, progress };
+    return { message: 'What is your monthly income?', phase: 'collect', step: null, progress };
   }
   if (!session.profile.expenses && session.profile.expenses !== 0) {
     sessionStore.updateSession(session.id, { flowStage: 'awaiting_expenses_value' });
-    return { message: "Quick one: what's your monthly expenses total?\nExamples: '20k', '35000'", phase: 'collect', step: null, progress };
+    return { message: "Monthly expenses?", phase: 'collect', step: null, progress };
   }
   if (!session.profile.age) {
-    return { message: 'And your age?\nExamples: "22", "age 31"', phase: 'collect', step: null, progress };
+    return { message: 'Your age?', phase: 'collect', step: null, progress };
   }
   if (!session.profile.goal) {
-    return { message: 'Primary goal: wealth, retirement, house, or education?\nExamples: "wealth creation", "car in 3 years", "retirement"', phase: 'collect', step: null, progress };
+    return { message: 'Main goal? (retirement, house, wealth, or education)', phase: 'collect', step: null, progress };
   }
   sessionStore.updateSession(session.id, { flowStage: 'awaiting_investments' });
   return { message: "What’s already working for you right now (SIP, FD, PPF, stocks)?\nExamples: 'SIP 5k', 'FD only', 'nothing yet'", phase: 'collect', step: null, progress };
@@ -764,6 +1118,26 @@ async function triggerAnalysis(session) {
 
 // ─── Freeform Phase Logic ─────────────────────────────────────────────────────
 async function handleFreeformPhase(session, userMessage) {
+  if (isSpecificInvestmentAdviceQuery(userMessage)) {
+    return {
+      message: [
+        `I can’t suggest specific mutual funds, AMCs, or stock picks.`,
+        `I’m an AI assistant, and markets carry risk, so personal investment advice should come from a licensed expert.`,
+        `${buildAdvisorContactLine()}`,
+      ].join('\n'),
+      phase: session.phase,
+    };
+  }
+
+  const directGoalPlan = buildGoalPlannerAnswer(session, userMessage);
+  if (directGoalPlan) {
+    return {
+      message: `${directGoalPlan}\n\n${buildPersonalizedNudge(session)}`,
+      phase: session.phase,
+      visual: makeGrowthLineData(session, {}),
+    };
+  }
+
   const profileContext = prompts.buildProfileContext(session.profile);
   const systemPrompt = prompts.CHAT_PROMPT
     .replace('{{PROFILE_CONTEXT}}', profileContext)
@@ -786,12 +1160,23 @@ async function handleFreeformPhase(session, userMessage) {
   let botMessage;
   try {
     botMessage = await groqService.chat(messages, {
-      temperature: parseFloat(process.env.GROQ_CHAT_TEMPERATURE) || 0.65,
+      temperature: parseFloat(process.env.GROQ_CHAT_TEMPERATURE) || 0.3,
       maxTokens:   320,
     });
   } catch (err) {
     console.error('[freeform]', err.message);
     botMessage = "I had a brief connectivity issue. Based on your profile, I'd strongly recommend scheduling a session with your financial advisor to discuss this in detail.";
+  }
+
+  // Keep responses less repetitive and easier to follow.
+  const lastAssistant = (session.history || []).filter(m => m.role === 'assistant').slice(-1)[0];
+  if (lastAssistant && typeof lastAssistant.content === 'string') {
+    const last = lastAssistant.content.trim().toLowerCase();
+    const now = String(botMessage || '').trim().toLowerCase();
+    if (last && now && last === now) {
+      const goal = (session.profile && session.profile.goal) || 'wealth';
+      botMessage = `To keep it practical: focus on your ${goal} goal with one monthly SIP plan and review it every 6 months.`;
+    }
   }
 
   // If the user provided name + phone in freeform text, save the lead immediately
@@ -847,8 +1232,9 @@ async function handleFreeformPhase(session, userMessage) {
   }
 
   return {
-    message: botMessage,
+    message: `${botMessage}${buildEndAnalysisLine(session, {})}\n\n${buildDiversificationText(session)}\n${buildAdvisorContactLine()}\n${buildPersonalizedNudge(session)}`,
     phase:   session.phase,
+    visual: makeGrowthLineData(session, {}),
   };
 }
 
