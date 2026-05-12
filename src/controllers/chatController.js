@@ -126,7 +126,7 @@ function buildLeadSummary(profile, plan) {
       `Total monthly expenses: ₹${financeService.formatINR(totalExpenses)}`,
       `Savings rate: ${plan.totals.savings_rate}%`,
       `Potential monthly savings buffer: ₹${financeService.formatINR(plan.totals.suggested_savings)}`,
-      `Recommended monthly SIP: ₹${financeService.formatINR(plan.totals.investable_amount)}`,
+      `Recommended monthly SIP: ₹${financeService.formatINR(plan.totals.recommended_sip_for_projection || plan.totals.investable_amount)}`,
       `MF Split: Flexi Cap ${Math.round(plan.fund_mix.flexi_cap * 100)}%, Mid Cap ${Math.round(plan.fund_mix.mid_cap * 100)}%, Small Cap ${Math.round(plan.fund_mix.small_cap * 100)}%`,
       plan.goal_projection ? plan.goal_projection.motivation : '',
       ...plan.expense_insights,
@@ -327,6 +327,9 @@ async function handleCollectPhase(session, userMessage) {
   const fundMixText = `Flexi Cap: ${Math.round(plan.fund_mix.flexi_cap * 100)}% (₹${financeService.formatINR(plan.fund_mix_amounts.flexi_cap)}), Mid Cap: ${Math.round(plan.fund_mix.mid_cap * 100)}% (₹${financeService.formatINR(plan.fund_mix_amounts.mid_cap)}), Small Cap: ${Math.round(plan.fund_mix.small_cap * 100)}% (₹${financeService.formatINR(plan.fund_mix_amounts.small_cap)})`;
 
   const insightsText = plan.expense_insights.join('\n');
+  const projectionBasisNote = plan.totals.projection_basis === 'post_optimization'
+    ? 'Note: SIP and projections are based on the post-optimization plan (after reducing Personal Spending and Extra / Unexpected).'
+    : 'Note: SIP and projections are based on your current surplus.';
 
   return {
     phase: 'freeform',
@@ -345,7 +348,8 @@ async function handleCollectPhase(session, userMessage) {
       `💡 **Insights**`,
       insightsText,
       '',
-      `📈 **Investment Plan** (SIP: ₹${financeService.formatINR(plan.totals.investable_amount)}/month)`,
+      `📈 **Investment Plan** (SIP: ₹${financeService.formatINR(plan.totals.recommended_sip_for_projection || plan.totals.investable_amount)}/month)`,
+      projectionBasisNote,
       `Fund Split: ${fundMixText}`,
       '',
       `🔮 **Projections**`,

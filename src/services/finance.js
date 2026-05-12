@@ -230,7 +230,8 @@ function calculateFinancialPlan(profile) {
   const extraUnexpected = toNumber(expenses.extra_unexpected);
 
   const totalExpenses = basicNeeds + billsPayments + personalSpending + extraUnexpected;
-  const monthlySurplus = Math.max(0, income - totalExpenses);
+  const rawMonthlySurplus = income - totalExpenses;
+  const monthlySurplus = Math.max(0, rawMonthlySurplus);
   const suggestedSavings = Math.round(monthlySurplus * 0.2); // 20% liquid buffer
   const investableAmount = Math.max(0, monthlySurplus - suggestedSavings);
   const savingsRate = income > 0 ? Math.round((monthlySurplus / income) * 100) : 0;
@@ -238,22 +239,42 @@ function calculateFinancialPlan(profile) {
   // Fund allocation
   const fundMix = allocationByRisk(profile.risk_profile);
 
-  // Time-horizon projections
-  const projections = [3, 5, 10, 15, 20].map((years) => ({
-    years,
-    monthly_investment: investableAmount,
-    expected_value: projectedValue(investableAmount, years, profile.risk_profile),
-    expected_value_formatted: formatCrLakh(projectedValue(investableAmount, years, profile.risk_profile)),
-  }));
-
   // Per-category optimization
   const categoryOptimization = calculateCategoryOptimization(income, expenses);
   const totalPotentialSaving = categoryOptimization.reduce((s, c) => s + c.potential_monthly_saving, 0);
 
+  // Deficit recovery path: prioritize Category 3 + 4 (Personal Spending + Extra / Unexpected).
+  const deficitAmount = Math.max(0, totalExpenses - income);
+  const needsOptimizationPath = rawMonthlySurplus <= 0;
+  const personalCategory = categoryOptimization.find(c => c.key === 'personal_spending');
+  const extraCategory = categoryOptimization.find(c => c.key === 'extra_unexpected');
+  const personalPotential = personalCategory ? personalCategory.potential_monthly_saving : 0;
+  const extraPotential = extraCategory ? extraCategory.potential_monthly_saving : 0;
+
+  // What-if cuts: even if category is within ideal %, user can still trim discretionary spends.
+  const personalWhatIfCut = Math.max(personalPotential, Math.round(personalSpending * 0.2));
+  const extraWhatIfCut = Math.max(extraPotential, Math.round(extraUnexpected * 0.3));
+  const prioritizedPotential = personalWhatIfCut + extraWhatIfCut;
+
+  // If there is a deficit, projections are shown for the post-optimization path.
+  const plannedCuts = prioritizedPotential;
+  const postCutSurplus = Math.max(0, plannedCuts - deficitAmount);
+  const recoverySuggestedSavings = Math.round(postCutSurplus * 0.2);
+  const postCutInvestableAmount = Math.max(0, postCutSurplus - recoverySuggestedSavings);
+  const recommendedSipForProjection = needsOptimizationPath ? postCutInvestableAmount : investableAmount;
+
+  // Time-horizon projections
+  const projections = [3, 5, 10, 15, 20].map((years) => ({
+    years,
+    monthly_investment: recommendedSipForProjection,
+    expected_value: projectedValue(recommendedSipForProjection, years, profile.risk_profile),
+    expected_value_formatted: formatCrLakh(projectedValue(recommendedSipForProjection, years, profile.risk_profile)),
+  }));
+
   // Goal projection
   const goalProjection = calculateGoalProjection(
     profile.goal,
-    investableAmount,
+    recommendedSipForProjection,
     profile.risk_profile
   );
 
@@ -276,13 +297,40 @@ function calculateFinancialPlan(profile) {
     expenseInsights.push('✅ Your expense mix is balanced. Focus on automating monthly SIPs for consistency.');
   }
 
+  if (needsOptimizationPath) {
+    const shortfallText = deficitAmount > 0
+      ? `higher than salary by ₹${formatINR(deficitAmount)}/month`
+      : 'equal to your salary, leaving zero monthly savings';
+    expenseInsights.push(
+      `🚨 Your expenses are ${shortfallText}. ` +
+      `Reduce Personal Spending and Extra / Unexpected first, then start investing.`
+    );
+    expenseInsights.push(
+      `📌 Post-optimization path: Personal Spending cut target ₹${formatINR(personalWhatIfCut)}/month and ` +
+      `Extra / Unexpected cut target ₹${formatINR(extraWhatIfCut)}/month. ` +
+      `Estimated SIP after these cuts: ₹${formatINR(postCutInvestableAmount)}/month.`
+    );
+  }
+
   // Expense breakdown for display
   const expenseBreakdown = {
     basic_needs: { amount: basicNeeds, pct: income > 0 ? Math.round((basicNeeds / income) * 100) : 0, label: 'Basic Needs' },
     bills_payments: { amount: billsPayments, pct: income > 0 ? Math.round((billsPayments / income) * 100) : 0, label: 'Bills & Payments' },
     personal_spending: { amount: personalSpending, pct: income > 0 ? Math.round((personalSpending / income) * 100) : 0, label: 'Personal Spending' },
     extra_unexpected: { amount: extraUnexpected, pct: income > 0 ? Math.round((extraUnexpected / income) * 100) : 0, label: 'Extra / Unexpected' },
-    savings_surplus: { amount: monthlySurplus, pct: savingsRate, label: 'Savings & Investment' },
+    savings_surplus: { amount: recommendedSipForProjection, pct: income > 0 ? Math.round((recommendedSipForProjection / income) * 100) : 0, label: 'Savings & Investment' },
+  };
+
+  const optimizedPersonalSpending = Math.max(0, personalSpending - personalWhatIfCut);
+  const optimizedExtraUnexpected = Math.max(0, extraUnexpected - extraWhatIfCut);
+  const optimizedTotalExpenses = basicNeeds + billsPayments + optimizedPersonalSpending + optimizedExtraUnexpected;
+  const optimizedExpenseBreakdown = {
+    basic_needs: { amount: basicNeeds, pct: income > 0 ? Math.round((basicNeeds / income) * 100) : 0, label: 'Basic Needs' },
+    bills_payments: { amount: billsPayments, pct: income > 0 ? Math.round((billsPayments / income) * 100) : 0, label: 'Bills & Payments' },
+    personal_spending: { amount: optimizedPersonalSpending, pct: income > 0 ? Math.round((optimizedPersonalSpending / income) * 100) : 0, label: 'Personal Spending' },
+    extra_unexpected: { amount: optimizedExtraUnexpected, pct: income > 0 ? Math.round((optimizedExtraUnexpected / income) * 100) : 0, label: 'Extra / Unexpected' },
+    savings_surplus: { amount: recommendedSipForProjection, pct: income > 0 ? Math.round((recommendedSipForProjection / income) * 100) : 0, label: 'Savings & Investment' },
+    total_expenses: optimizedTotalExpenses,
   };
 
   return {
@@ -292,16 +340,19 @@ function calculateFinancialPlan(profile) {
       monthly_surplus: monthlySurplus,
       suggested_savings: suggestedSavings,
       investable_amount: investableAmount,
+      recommended_sip_for_projection: recommendedSipForProjection,
+      projection_basis: needsOptimizationPath ? 'post_optimization' : 'current_surplus',
       savings_rate: savingsRate,
       total_potential_saving: totalPotentialSaving,
+      deficit_amount: deficitAmount,
     },
     expense_breakdown: expenseBreakdown,
     category_optimization: categoryOptimization,
     fund_mix: fundMix,
     fund_mix_amounts: {
-      flexi_cap: Math.round(investableAmount * fundMix.flexi_cap),
-      mid_cap: Math.round(investableAmount * fundMix.mid_cap),
-      small_cap: Math.round(investableAmount * fundMix.small_cap),
+      flexi_cap: Math.round(recommendedSipForProjection * fundMix.flexi_cap),
+      mid_cap: Math.round(recommendedSipForProjection * fundMix.mid_cap),
+      small_cap: Math.round(recommendedSipForProjection * fundMix.small_cap),
     },
     assumptions: {
       returns: ASSUMED_RETURNS,
@@ -310,7 +361,20 @@ function calculateFinancialPlan(profile) {
     projections,
     goal_projection: goalProjection,
     expense_insights: expenseInsights,
-    goal_nudge: buildGoalHint(profile.goal, investableAmount, profile.risk_profile),
+    goal_nudge: buildGoalHint(profile.goal, recommendedSipForProjection, profile.risk_profile),
+    recovery_plan: {
+      is_deficit: deficitAmount > 0,
+      is_zero_savings: monthlySurplus === 0,
+      is_optimization_applied: needsOptimizationPath,
+      prioritized_categories: ['Personal Spending', 'Extra / Unexpected'],
+      personal_spending_potential_saving: personalPotential,
+      extra_unexpected_potential_saving: extraPotential,
+      personal_spending_target_cut: personalWhatIfCut,
+      extra_unexpected_target_cut: extraWhatIfCut,
+      prioritized_total_potential_saving: prioritizedPotential,
+      post_cut_investable_amount: postCutInvestableAmount,
+    },
+    expense_breakdown_optimized: optimizedExpenseBreakdown,
   };
 }
 

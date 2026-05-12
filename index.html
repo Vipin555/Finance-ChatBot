@@ -540,10 +540,12 @@
       const fundAmounts = plan.fund_mix_amounts || {};
       const goalProj = plan.goal_projection || {};
       const catOpt = plan.category_optimization || [];
-      const expBreak = plan.expense_breakdown || {};
+      const expBreak = (plan.recovery_plan && plan.recovery_plan.is_optimization_applied)
+        ? (plan.expense_breakdown_optimized || plan.expense_breakdown || {})
+        : (plan.expense_breakdown || {});
 
       // 1. Expense breakdown doughnut
-      addElement(buildExpenseCard(expBreak, totals));
+      addElement(buildExpenseCard(expBreak, totals, !!(plan.recovery_plan && plan.recovery_plan.is_optimization_applied)));
 
       // 2. MF allocation card
       setTimeout(() => addElement(buildMFCard(fundMix, fundAmounts, totals)), 400);
@@ -564,26 +566,33 @@
     }
 
     // ─── Expense Breakdown Doughnut ──────────────────────────
-    function buildExpenseCard(expBreak, totals) {
+    function buildExpenseCard(expBreak, totals, isOptimizedView) {
       const wrap = document.createElement('div');
       wrap.className = 'msg bot';
       wrap.style.cssText = 'max-width:100%;width:100%';
       const chartId = `expDoughnut_${Date.now()}`;
+      const monthlySalary = Number(totals?.monthly_salary || 0);
+      const basicAmt = Number((expBreak.basic_needs || {}).amount || 0);
+      const billsAmt = Number((expBreak.bills_payments || {}).amount || 0);
+      const personalAmt = Number((expBreak.personal_spending || {}).amount || 0);
+      const extraAmt = Number((expBreak.extra_unexpected || {}).amount || 0);
+      const savingsAmt = Math.max(0, monthlySalary - (basicAmt + billsAmt + personalAmt + extraAmt));
+      const safeSalary = monthlySalary > 0 ? monthlySalary : (basicAmt + billsAmt + personalAmt + extraAmt + savingsAmt);
       const cats = [
-        { key: 'basic_needs', label: 'Basic Needs', color: '#f5c518' },
-        { key: 'bills_payments', label: 'Bills & Payments', color: '#60a5fa' },
-        { key: 'personal_spending', label: 'Personal Spending', color: '#f87171' },
-        { key: 'extra_unexpected', label: 'Extra / Unexpected', color: '#a78bfa' },
-        { key: 'savings_surplus', label: 'Savings & Investment', color: '#22c55e' },
+        { key: 'basic_needs', label: 'Basic Needs', color: '#f5c518', amount: basicAmt },
+        { key: 'bills_payments', label: 'Bills & Payments', color: '#60a5fa', amount: billsAmt },
+        { key: 'personal_spending', label: 'Personal Spending', color: '#f87171', amount: personalAmt },
+        { key: 'extra_unexpected', label: 'Extra / Unexpected', color: '#a78bfa', amount: extraAmt },
+        { key: 'savings_surplus', label: 'Savings & Investment', color: '#22c55e', amount: savingsAmt },
       ];
 
       const legendHTML = cats.map(c => {
-        const d = expBreak[c.key] || {};
-        return `<div class="expense-legend-item"><span class="legend-dot" style="background:${c.color}"></span>${c.label} (${d.pct || 0}%)<span class="legend-value">₹${formatINR(d.amount || 0)}</span></div>`;
+        const pct = safeSalary > 0 ? Math.round((c.amount / safeSalary) * 100) : 0;
+        return `<div class="expense-legend-item"><span class="legend-dot" style="background:${c.color}"></span>${c.label} (${pct}%)<span class="legend-value">₹${formatINR(c.amount || 0)}</span></div>`;
       }).join('');
 
       wrap.innerHTML = `<div class="expense-card">
-    <div class="expense-card-title">📊 Monthly Expense Breakdown</div>
+    <div class="expense-card-title">📊 ${isOptimizedView ? 'Monthly Expense Breakdown (Post-Optimization)' : 'Monthly Expense Breakdown'}</div>
     <div class="expense-chart-row">
       <div class="expense-doughnut-wrap"><canvas id="${chartId}"></canvas></div>
       <div class="expense-legend">${legendHTML}</div>
@@ -597,7 +606,7 @@
           type: 'doughnut',
           data: {
             labels: cats.map(c => c.label),
-            datasets: [{ data: cats.map(c => (expBreak[c.key] || {}).amount || 0), backgroundColor: cats.map(c => c.color), borderWidth: 0 }]
+            datasets: [{ data: cats.map(c => c.amount || 0), backgroundColor: cats.map(c => c.color), borderWidth: 0 }]
           },
           options: { responsive: true, maintainAspectRatio: true, cutout: '62%', plugins: { legend: { display: false }, tooltip: { callbacks: { label: ctx => ` ₹${formatINR(ctx.raw)}` } } } }
         });
@@ -614,7 +623,7 @@
       const mc = Math.round((fundMix.mid_cap || 0) * 100);
       const sc = Math.round((fundMix.small_cap || 0) * 100);
       wrap.innerHTML = `<div class="mf-card">
-    <div class="mf-title">💼 Recommended Mutual Fund Split (SIP: ₹${formatINR(totals.investable_amount || 0)}/mo)</div>
+    <div class="mf-title">💼 Recommended Mutual Fund Split (SIP: ₹${formatINR(totals.recommended_sip_for_projection || totals.investable_amount || 0)}/mo)</div>
     <div class="mf-bar-wrap">
       <div class="mf-bar-seg" style="width:${fc}%;background:#f5c518">${fc}%</div>
       <div class="mf-bar-seg" style="width:${mc}%;background:#60a5fa">${mc}%</div>
@@ -978,7 +987,7 @@
       const plan = a.plan || a;
       const totals = plan.totals || {};
       const surplus = totals.monthly_surplus || a.monthly_surplus || 0;
-      const investable = totals.investable_amount || a.investable_amount || 0;
+      const investable = totals.recommended_sip_for_projection || totals.investable_amount || a.investable_amount || 0;
       const insights = plan.expense_insights || a.quick_wins || [];
 
       const cta = document.createElement('div');
@@ -1064,19 +1073,8 @@
         Piyush specialises in <strong>${spec.toLowerCase()}</strong> with a focus on <strong>${risk}</strong>.
         He has helped <strong>200+ clients</strong> grow wealth systematically — avg. portfolio CAGR of <strong>18.4%</strong> over 5 years.
       </div>
-      <div class="advisor-cta-title">📲 Connect Now</div>
-      <div class="advisor-actions">
-        <a href="https://wa.me/919876543210?text=${encodeURIComponent(`Hi Piyush! I'm ${name}. My FinanceAI profile: Salary ₹${formatINR(salary)}/mo, Goal: ${goal}, Risk: ${riskLabel}. I'd love to discuss a personalised plan.`)}"
-           target="_blank" class="action-btn whatsapp">💬 WhatsApp</a>
-        <a href="tel:+919876543210" class="action-btn call">📞 Call Now</a>
-        <a href="mailto:piyush.tembhekar@financeai.in?subject=Financial Plan Enquiry&body=Hi Piyush,%0A%0AI'm ${encodeURIComponent(name)}.%0ASalary: ₹${formatINR(salary)}/month%0AGoal: ${encodeURIComponent(goal)}%0ARisk: ${encodeURIComponent(riskLabel)}%0A%0APlease reach out to discuss a plan."
-           class="action-btn email">✉️ Email</a>
-        <a href="#" class="action-btn linkedin">🔗 LinkedIn</a>
-      </div>
-      <button class="book-btn" onclick="window.open('https://calendly.com','_blank');addBotMessage('✅ Session booking opened! Piyush will confirm shortly.')">
-        📅 Book Free 30-Min Session →
-      </button>
-      <div class="advisor-note"><span>✓</span> Free consultation · No obligation · ₹0 cost</div>
+      <div class="advisor-cta-title">Connect Now</div>
+      <div class="advisor-note" style="font-size:1rem;color:var(--text-primary);margin-top:0.25rem">Contact Number: +91 86057 27484</div>
     </div>`;
 
       addElement(wrap);

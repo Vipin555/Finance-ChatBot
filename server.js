@@ -61,12 +61,45 @@ if (missing.length > 0) {
 
 // ─── Database Connection ──────────────────────────────────────────────────────
 if (process.env.MONGODB_URI) {
-  mongoose.connect(process.env.MONGODB_URI)
+  const mongoConnectOptions = {
+    maxPoolSize: 10,
+    minPoolSize: 5,
+    socketTimeoutMS: 45000,
+    connectTimeoutMS: 30000,
+    serverSelectionTimeoutMS: 30000,
+    retryWrites: true,
+    waitQueueTimeoutMS: 10000,
+  };
+
+  mongoose.connect(process.env.MONGODB_URI, mongoConnectOptions)
   .then(async () => {
-    console.log('\x1b[32m[Database]\x1b[0m Connected to MongoDB.');
+    console.log('\x1b[32m[Database]\x1b[0m Connected to MongoDB successfully.');
     await seedInitialAdminUser();
   })
-  .catch((err) => console.error('\x1b[31m[Database ERROR]\x1b[0m', err));
+  .catch((err) => {
+    console.error('\x1b[31m[Database ERROR]\x1b[0m', err.message);
+    console.error(
+      '\x1b[33m[Connection Help]\x1b[0m:\n' +
+      '  1. Verify MongoDB URI in .env is correct\n' +
+      '  2. Check IP whitelist in MongoDB Atlas Network Access\n' +
+      '  3. Verify database user credentials\n' +
+      '  4. Ensure cluster is running (not paused)\n' +
+      '  5. Test: mongosh "' + (process.env.MONGODB_URI || '').split('@')[1] + '"'
+    );
+  });
+
+  // Handle connection events
+  mongoose.connection.on('connected', () => {
+    console.log('\x1b[32m[Mongoose]\x1b[0m Connected event');
+  });
+  
+  mongoose.connection.on('error', (err) => {
+    console.error('\x1b[31m[Mongoose Error]\x1b[0m', err.message);
+  });
+  
+  mongoose.connection.on('disconnected', () => {
+    console.warn('\x1b[33m[Mongoose]\x1b[0m Disconnected from MongoDB');
+  });
 }
 
 // ─── App Init ─────────────────────────────────────────────────────────────────

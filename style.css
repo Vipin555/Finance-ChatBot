@@ -1050,61 +1050,6 @@ body {
   letter-spacing: 0.06em;
   margin-bottom: 0.75rem;
 }
-.advisor-actions {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 0.6rem;
-  margin-bottom: 1rem;
-}
-.action-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.5rem;
-  padding: 0.75rem;
-  border-radius: 12px;
-  font-size: 0.82rem;
-  font-weight: 600;
-  cursor: pointer;
-  text-decoration: none;
-  transition: all 0.2s ease;
-  border: 1px solid var(--border);
-  color: var(--text-primary);
-  background: var(--bg-card);
-  font-family: 'Inter', sans-serif;
-}
-.action-btn:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 6px 20px rgba(0,0,0,0.2);
-  border-color: var(--border-gold);
-}
-.action-btn.whatsapp { color: #22c55e; border-color: rgba(34,197,94,0.3); }
-.action-btn.whatsapp:hover { background: rgba(34,197,94,0.08); box-shadow: 0 4px 15px rgba(34,197,94,0.2); }
-.action-btn.call { color: #60a5fa; border-color: rgba(96,165,250,0.3); }
-.action-btn.call:hover { background: rgba(96,165,250,0.08); box-shadow: 0 4px 15px rgba(96,165,250,0.2); }
-.action-btn.email { color: var(--gold-400); border-color: rgba(245,197,24,0.3); }
-.action-btn.email:hover { background: rgba(245,197,24,0.06); box-shadow: 0 4px 15px rgba(245,197,24,0.15); }
-.action-btn.linkedin { color: #818cf8; border-color: rgba(129,140,248,0.3); }
-.action-btn.linkedin:hover { background: rgba(129,140,248,0.08); box-shadow: 0 4px 15px rgba(129,140,248,0.2); }
-.book-btn {
-  width: 100%;
-  background: linear-gradient(135deg, var(--gold-500), var(--gold-400));
-  color: #05070f;
-  border: none;
-  border-radius: 12px;
-  padding: 0.9rem;
-  font-size: 0.92rem;
-  font-weight: 800;
-  font-family: 'Outfit', sans-serif;
-  cursor: pointer;
-  transition: all 0.25s ease;
-  box-shadow: 0 4px 20px rgba(245,197,24,0.3);
-  letter-spacing: 0.02em;
-}
-.book-btn:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 8px 30px rgba(245,197,24,0.45);
-}
 .advisor-note {
   text-align: center;
   font-size: 0.72rem;
@@ -1398,7 +1343,6 @@ body {
   .main { padding: 1rem 0.75rem 0; }
   .proj-stats { grid-template-columns: repeat(3, 1fr); gap: 0.5rem; }
   .stat-value { font-size: 0.88rem; }
-  .advisor-actions { grid-template-columns: 1fr 1fr; }
   .hook-headline { font-size: 1.05rem; }
   .gate-card { padding: 2rem 1.5rem; }
   #chat-window { height: calc(100vh - 100px); }
@@ -1411,7 +1355,6 @@ body {
   .goal-headline { font-size: 1rem; }
 }
 @media (max-width: 380px) {
-  .advisor-actions { grid-template-columns: 1fr; }
   .proj-stats { grid-template-columns: 1fr 1fr; }
   .mf-details { grid-template-columns: 1fr; }
 }
