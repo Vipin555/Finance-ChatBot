@@ -4,7 +4,6 @@ const sessionStore = require('../services/sessionStore');
 const groqService = require('../services/groq');
 const financeService = require('../services/finance');
 const Lead = require('../models/Lead');
-const leadsController = require('./leadsController');
 const { CHAT_PROMPT, GOAL_MOTIVATION_PROMPT, buildProfileContext } = require('../prompts/system');
 
 // ─── Collection Steps ────────────────────────────────────────────────────────
@@ -269,15 +268,6 @@ async function handleCollectPhase(session, userMessage) {
   const advisor = getAdvisorCard();
   const summary = buildLeadSummary(session.profile, plan);
 
-  // Save lead locally
-  const leadObj = leadsController.saveLeadObject({
-    name: session.profile.name,
-    phone: session.profile.phone,
-    address: session.profile.address,
-    financial_profile: session.profile,
-    peak_insight: summary.key_financial_insights.join(' | '),
-  });
-
   // Save lead to MongoDB
   try {
     if (process.env.MONGODB_URI) {
@@ -317,7 +307,7 @@ async function handleCollectPhase(session, userMessage) {
 
   // Build the rich analysis response message
   const projectionText = plan.projections
-    .map((p) => `📊 **${p.years}Y**: Invest ₹${financeService.formatINR(p.monthly_investment)}/month → Expected ₹${p.expected_value_formatted}`)
+    .map((p) => `📊 **${p.years}Y**: Invest ₹${financeService.formatINR(p.monthly_investment)}/month → Expected ${p.expected_value_formatted}`)
     .join('\n');
 
   const categoryBreakdown = plan.category_optimization

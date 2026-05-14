@@ -1008,8 +1008,7 @@
       </div>` : ''}
     <div class="hook-buttons">
       <button class="btn-cta" id="yes-plan-btn">✨ Yes, show me how →</button>
-      <button class="btn-skip" id="skip-plan-btn">Maybe later</button>
-    </div>`;
+    </div>`;                  
 
       cta.querySelector('#yes-plan-btn').onclick = () => {
         cta.style.opacity = '0.5';
@@ -1017,11 +1016,6 @@
         sendMessage('Yes, I want a personalised financial plan', 'Yes, show me how →');
         setTimeout(() => showAdvisorCard(a, profile), 1800);
       };
-      cta.querySelector('#skip-plan-btn').onclick = () => {
-        sendMessage('Maybe later', 'Maybe later');
-        enableFreeChat('Ask me anything about your finances...');
-      };
-
       wrap.appendChild(cta);
       return wrap;
     }

@@ -1,60 +1,39 @@
 "use strict";
 
-const fs = require('fs');
-const path = require('path');
+const { v4: uuidv4 } = require('uuid');
+const Lead = require('../models/Lead');
 
-const DATA_FILE = path.join(process.cwd(), 'leads.json');
-
-function readAll() {
-  try {
-    if (!fs.existsSync(DATA_FILE)) return [];
-    return JSON.parse(fs.readFileSync(DATA_FILE, 'utf-8')) || [];
-  } catch (e) {
-    return [];
-  }
-}
-
-function writeAll(leads) {
-  fs.writeFileSync(DATA_FILE, JSON.stringify(leads, null, 2));
-}
-
-function makeLead(obj) {
-  const profile = obj.financial_profile || {};
-  const expenses = profile.expenses || {};
+function buildLeadPayload(body = {}) {
+  const profile = body.profile || body.financial_profile || {};
+  const expenseBreakdown = body.expenseBreakdown || body.expense_breakdown || profile.expenses || {
+    basic_needs: 0,
+    bills_payments: 0,
+    personal_spending: 0,
+    extra_unexpected: 0,
+  };
 
   return {
-    id: `lead_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
-    name: obj.name || '',
-    phone: obj.phone || '',
-    email: obj.email || '',
-    address: obj.address || '',
-    monthly_salary: profile.monthly_salary || 0,
-    goal: profile.goal || '',
-    risk_profile: profile.risk_profile || 'moderate',
-    expense_breakdown: {
-      basic_needs: expenses.basic_needs || 0,
-      bills_payments: expenses.bills_payments || 0,
-      personal_spending: expenses.personal_spending || 0,
-      extra_unexpected: expenses.extra_unexpected || 0,
-    },
-    captured_at: new Date().toISOString(),
-    status: 'new',
-    financial_profile: profile,
-    conversation_summary: obj.conversation_summary || '',
-    peak_insight: obj.peak_insight || '',
-    chat_transcript: obj.chat_transcript || [],
+    userId: body.userId || '',
+    sessionId: body.sessionId || uuidv4(),
+    name: body.name || '',
+    phone: body.phone || '',
+    address: body.address || '',
+    profile,
+    analysis: body.analysis || {},
+    keyFinancialInsights: Array.isArray(body.keyFinancialInsights)
+      ? body.keyFinancialInsights
+      : Array.isArray(body.key_financial_insights)
+      ? body.key_financial_insights
+      : [],
+    peakInsight: body.peakInsight || body.peak_insight || '',
+    expenseBreakdown,
+    monthlySalary: body.monthlySalary || profile.monthly_salary || 0,
+    goal: body.goal || profile.goal || '',
+    riskProfile: body.riskProfile || body.risk_profile || profile.risk_profile || 'moderate',
+    status: body.status || 'new',
+    conversationStartedAt: body.conversationStartedAt ? new Date(body.conversationStartedAt) : undefined,
+    conversationCompletedAt: body.conversationCompletedAt ? new Date(body.conversationCompletedAt) : undefined,
   };
-}
-
-/**
- * Save a lead object programmatically and return the saved lead.
- */
-function saveLeadObject(obj) {
-  const leads = readAll();
-  const lead = makeLead(obj || {});
-  leads.unshift(lead);
-  writeAll(leads);
-  return lead;
 }
 
 async function createLead(req, res) {
@@ -64,10 +43,8 @@ async function createLead(req, res) {
       return res.status(400).json({ error: 'name and phone are required' });
     }
 
-    const leads = readAll();
-    const lead = makeLead(body);
-    leads.unshift(lead);
-    writeAll(leads);
+    const lead = new Lead(buildLeadPayload(body));
+    await lead.save();
 
     return res.json({ success: true, lead });
   } catch (err) {
@@ -78,7 +55,24 @@ async function createLead(req, res) {
 
 async function listLeads(req, res) {
   try {
-    const leads = readAll();
+    const limit = Math.min(parseInt(req.query.limit, 10) || 200, 500);
+    const leads = await Lead.find({}, {
+      name: 1,
+      phone: 1,
+      address: 1,
+      monthlySalary: 1,
+      keyFinancialInsights: 1,
+      peakInsight: 1,
+      conversationStartedAt: 1,
+      conversationCompletedAt: 1,
+      createdAt: 1,
+      updatedAt: 1,
+    })
+      .sort({ createdAt: -1 })
+      .limit(limit)
+      .lean()
+      .exec();
+
     return res.json({ leads, total: leads.length });
   } catch (err) {
     console.error('[listLeads]', err);
@@ -92,13 +86,23 @@ async function updateLeadStatus(req, res) {
     const { status } = req.body || {};
     if (!id || !status) return res.status(400).json({ error: 'id and status required' });
 
-    const leads = readAll();
-    const idx = leads.findIndex(l => l.id === id);
-    if (idx === -1) return res.status(404).json({ error: 'lead not found' });
-    leads[idx].status = status;
-    leads[idx].updated_at = new Date().toISOString();
-    writeAll(leads);
-    return res.json({ success: true, lead: leads[idx] });
+    const query = { _id: id };
+    if (!id.match(/^[0-9a-fA-F]{24}$/)) {
+      query.sessionId = id;
+      delete query._id;
+    }
+
+    const lead = await Lead.findOneAndUpdate(
+      query,
+      {
+        status,
+        updatedAt: new Date(),
+      },
+      { new: true }
+    ).lean();
+
+    if (!lead) return res.status(404).json({ error: 'lead not found' });
+    return res.json({ success: true, lead });
   } catch (err) {
     console.error('[updateLeadStatus]', err);
     return res.status(500).json({ error: 'Failed to update lead' });
@@ -109,5 +113,4 @@ module.exports = {
   createLead,
   listLeads,
   updateLeadStatus,
-  saveLeadObject,
 };

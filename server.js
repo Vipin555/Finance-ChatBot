@@ -26,7 +26,6 @@ const path        = require('path');
 const rateLimit   = require('express-rate-limit');
 const sessionStore = require('./src/services/sessionStore');
 const chatRoutes  = require('./src/routes/chat');
-const leadsRoutes = require('./src/routes/leads');
 const adminRoutes = require('./src/routes/admin');
 const { requestLogger, notFoundHandler, globalErrorHandler } = require('./src/middleware/errorHandler');
 const AdminUser = require('./src/models/AdminUser');
@@ -154,7 +153,6 @@ app.use(requestLogger);
 
 // ─── API Routes (registered BEFORE static so /api/* is never intercepted by files) ────
 app.use('/api/chat', chatRoutes);
-app.use('/api/leads', leadsRoutes);
 app.use('/api/admin', adminRoutes);
 
 // ─── Admin Panel ────────────────────────────────────────────────────────────

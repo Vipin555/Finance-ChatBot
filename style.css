@@ -950,19 +950,6 @@ body {
   transform: translateY(-3px);
   box-shadow: 0 8px 40px rgba(245,197,24,0.55);
 }
-.btn-skip {
-  background: transparent;
-  border: 1px solid var(--border);
-  color: var(--text-muted);
-  border-radius: 12px;
-  padding: 0.9rem 1.5rem;
-  font-size: 0.82rem;
-  font-family: 'Inter', sans-serif;
-  cursor: pointer;
-  transition: all 0.2s ease;
-}
-.btn-skip:hover { color: var(--text-secondary); border-color: var(--border-gold); }
-
 /* ─── Advisor Card ─── */
 .advisor-card {
   background: var(--advisor-bg);

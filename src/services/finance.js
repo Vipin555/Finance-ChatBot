@@ -261,7 +261,10 @@ function calculateFinancialPlan(profile) {
   const postCutSurplus = Math.max(0, plannedCuts - deficitAmount);
   const recoverySuggestedSavings = Math.round(postCutSurplus * 0.2);
   const postCutInvestableAmount = Math.max(0, postCutSurplus - recoverySuggestedSavings);
-  const recommendedSipForProjection = needsOptimizationPath ? postCutInvestableAmount : investableAmount;
+  // If surplus is exactly zero, still guide users with a minimum starter SIP.
+  const zeroSurplusStarterSip = rawMonthlySurplus === 0 ? 500 : 0;
+  const optimizedSip = Math.max(postCutInvestableAmount, zeroSurplusStarterSip);
+  const recommendedSipForProjection = needsOptimizationPath ? optimizedSip : investableAmount;
 
   // Time-horizon projections
   const projections = [3, 5, 10, 15, 20].map((years) => ({
@@ -303,12 +306,12 @@ function calculateFinancialPlan(profile) {
       : 'equal to your salary, leaving zero monthly savings';
     expenseInsights.push(
       `🚨 Your expenses are ${shortfallText}. ` +
-      `Reduce Personal Spending and Extra / Unexpected first, then start investing.`
+      `Trim Personal Spending and Extra / Unexpected to create room for investing and a stronger financial future.`
     );
     expenseInsights.push(
       `📌 Post-optimization path: Personal Spending cut target ₹${formatINR(personalWhatIfCut)}/month and ` +
       `Extra / Unexpected cut target ₹${formatINR(extraWhatIfCut)}/month. ` +
-      `Estimated SIP after these cuts: ₹${formatINR(postCutInvestableAmount)}/month.`
+      `Estimated SIP after these cuts: ₹${formatINR(recommendedSipForProjection)}/month.`
     );
   }
 

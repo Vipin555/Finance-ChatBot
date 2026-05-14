@@ -2,6 +2,7 @@ node_modules/
 .env
 .env.example
 *.log
+leads.json
 
 # Generated reports/caches
 graphify-out/
@@ -9,3 +10,4 @@ graphify-out/
 # OS / editor
 .DS_Store
 Thumbs.db
+.env.example
