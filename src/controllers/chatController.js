@@ -302,7 +302,7 @@ async function handleCollectPhase(session, userMessage) {
   // Update session to freeform
   sessionStore.updateSession(session.id, {
     phase: 'freeform',
-    analysis: { plan, lead_summary: summary, advisor, local_lead_id: leadObj.id },
+    analysis: { plan, lead_summary: summary, advisor },
   });
 
   // Build the rich analysis response message
@@ -324,7 +324,7 @@ async function handleCollectPhase(session, userMessage) {
   return {
     phase: 'freeform',
     progress: 100,
-    analysis: { plan, lead_summary: summary, advisor, local_lead_id: leadObj.id },
+    analysis: { plan, lead_summary: summary, advisor },
     profile: session.profile,
     message: [
       `🎉 **Your PMS Financial Profile is ready, ${session.profile.name}!**`,
