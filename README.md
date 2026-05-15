@@ -72,6 +72,9 @@ If you host the frontend separately from the backend (different domain/port), pa
 
 - `?apiBase=http://localhost:3000/api/chat`
 
+### Render deployment note
+If deploying on Render, use `npm start` as the Start Command (avoid `npm run dev` in production). This prevents hot-reload/watch mode from causing restarts that can surface as intermittent 502s.
+
 ### `POST /api/chat/start`
 Creates a new session and returns the first bot question.
 

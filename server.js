@@ -256,4 +256,14 @@ function gracefulShutdown(signal) {
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 process.on('SIGINT',  () => gracefulShutdown('SIGINT'));
 
+// Prevent silent crashes in production hosting (e.g. Render/Heroku) where an unhandled rejection
+// can terminate the process and appear to clients as a 502/Bad Gateway.
+process.on('unhandledRejection', (reason) => {
+  console.error('\x1b[31m[unhandledRejection]\x1b[0m', reason);
+});
+process.on('uncaughtException', (err) => {
+  console.error('\x1b[31m[uncaughtException]\x1b[0m', err);
+  gracefulShutdown('uncaughtException');
+});
+
 module.exports = app; // for testing
