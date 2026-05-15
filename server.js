@@ -110,6 +110,7 @@ const isDev = process.env.NODE_ENV !== 'production';
 app.use(helmet({
   crossOriginResourcePolicy: { policy: 'cross-origin' },
   contentSecurityPolicy: false, // Disabled for dev to allow Chart.js and inline scripts
+  frameguard: false, // Allow embedding chatbot UI inside the main website via iframe
 }));
 
 // ─── CORS ─────────────────────────────────────────────────────────────────────
@@ -122,10 +123,16 @@ app.use(cors({
   origin: (origin, callback) => {
     // Allow requests with no origin (e.g. Postman, curl) in dev
     if (!origin && isDev) return callback(null, true);
+    // If no allowlist is configured, don't hard-fail the request.
+    // This service is often embedded/proxied and a missing env var would otherwise
+    // break same-origin browser requests by throwing and returning 500.
+    if (allowedOrigins.length === 0) return callback(null, true);
     if (!origin || allowedOrigins.includes(origin) || allowedOrigins.includes('*')) {
       return callback(null, true);
     }
-    callback(new Error(`CORS: origin '${origin}' not allowed`));
+    // Don't throw (which becomes a 500). Returning "false" tells cors to skip
+    // setting CORS headers; the browser will enforce the block when cross-origin.
+    return callback(null, false);
   },
   methods:          ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders:   ['Content-Type', 'Authorization'],
