@@ -4,20 +4,59 @@ const sessionStore = require('../services/sessionStore');
 const groqService = require('../services/groq');
 const financeService = require('../services/finance');
 const Lead = require('../models/Lead');
-const { CHAT_PROMPT, GOAL_MOTIVATION_PROMPT, buildProfileContext } = require('../prompts/system');
+const {
+  CHAT_PROMPT, COLLECTION_PROMPT, MID_CONVERSATION_HOOK_PROMPT,
+  buildProfileContext, buildPartialProfileContext,
+} = require('../prompts/system');
 
-// ─── Collection Steps ────────────────────────────────────────────────────────
+// ─── Collection Steps (psychology-driven order) ──────────────────────────────
+// Flow: easy/exciting first → sensitive data after trust is built → contact AFTER value shown
 const STEPS = [
-  { key: 'name', question: '👋 Welcome to your PMS wealth assistant! I\'m here to help you build a smart investment plan. Let\'s start — what is your full name?' },
-  { key: 'address', question: 'Great to meet you! Please share your current address.' },
-  { key: 'phone', question: 'What is your 10-digit mobile number?' },
-  { key: 'monthly_salary', question: 'What is your monthly take-home salary (in ₹)?' },
-  { key: 'basic_needs', question: 'Now let\'s understand your expenses. How much do you spend monthly on **Basic Needs** — rent, food, groceries, transport?' },
-  { key: 'bills_payments', question: 'How much goes to **Bills & Payments** — loan EMIs, insurance premiums, utilities, phone bills?' },
-  { key: 'personal_spending', question: 'What about **Personal Spending** — shopping, eating out, subscriptions, entertainment?' },
-  { key: 'extra_unexpected', question: 'Lastly on expenses — any **Extra / Unexpected** costs — medical, events, emergencies? (Enter 0 if none)' },
-  { key: 'goal', question: '🎯 What is your main financial goal? For example: buy a car, Australia trip, dream home, build wealth, retirement, etc.' },
-  { key: 'risk_profile', question: 'Last one! What\'s your risk comfort level? Choose: **conservative**, **moderate**, or **aggressive**.' },
+  {
+    key: 'name', type: 'text', phase_label: 'Getting to know you',
+    question: "Hey there! 👋 I'm your personal financial intelligence assistant — think of me as that smart friend who actually knows about money.\n\nWhat should I call you?",
+    suggestions: [],
+  },
+  {
+    key: 'goal', type: 'choice_or_text', phase_label: 'Setting your goal',
+    question: "Nice to meet you, {{name}}! 🎯\n\nBefore we dive into numbers, tell me — what's the one financial dream that keeps you excited?",
+    suggestions: ['Buy a car 🚗', 'Dream home 🏠', 'Travel abroad ✈️', 'Build wealth 💰', 'Retirement fund 🏖️', 'Education fund 🎓', 'Wedding fund 💍', 'Emergency fund 🛡️'],
+  },
+  {
+    key: 'age_bracket', type: 'choice', phase_label: 'Understanding you',
+    question: "Quick one — which age group are you in? This helps me pick the right investment horizon for your **{{goal}}**.",
+    suggestions: ['22-25', '26-30', '31-35', '36-40', '41-50', '50+'],
+  },
+  {
+    key: 'monthly_salary', type: 'choice_or_text', phase_label: 'Analyzing income',
+    question: "Now let's talk money 💰\n\nWhat's your monthly take-home salary? This stays between us — I need real numbers to give you a real plan, not generic advice.",
+    suggestions: ['₹20,000-30,000', '₹30,000-50,000', '₹50,000-75,000', '₹75,000-1,00,000', '₹1,00,000-2,00,000', '₹2,00,000+'],
+  },
+  {
+    key: 'basic_needs', type: 'choice_or_text', phase_label: 'Mapping expenses',
+    question: "📌 **Expense 1/4: Essentials**\n\nHow much goes to the non-negotiables — rent, food, groceries, transport?",
+    suggestions: 'dynamic', // Generated based on salary
+  },
+  {
+    key: 'bills_payments', type: 'choice_or_text', phase_label: 'Mapping expenses',
+    question: "📌 **Expense 2/4: Fixed Commitments**\n\nEMIs, insurance, utilities, phone/internet bills?",
+    suggestions: ['₹0 (no EMIs)', '₹5,000-10,000', '₹10,000-20,000', '₹20,000-50,000'],
+  },
+  {
+    key: 'personal_spending', type: 'choice_or_text', phase_label: 'Mapping expenses',
+    question: "📌 **Expense 3/4: Lifestyle**\n\nShopping, eating out, subscriptions, entertainment — the fun stuff 😊",
+    suggestions: 'dynamic',
+  },
+  {
+    key: 'extra_unexpected', type: 'choice_or_text', phase_label: 'Almost there!',
+    question: "📌 **Expense 4/4: Buffer**\n\nAny extra or unexpected costs — medical, events, emergencies? (₹0 if none)",
+    suggestions: ['₹0', '₹2,000-5,000', '₹5,000-10,000', '₹10,000+'],
+  },
+  {
+    key: 'risk_profile', type: 'choice', phase_label: 'Final step!',
+    question: "Last one! 🎚️ How comfortable are you with investment ups and downs?\n\n• **Conservative** — Safety first, steady returns 🛡️\n• **Moderate** — Balance of growth & stability ⚖️\n• **Aggressive** — Maximum growth, okay with swings 🚀",
+    suggestions: ['Conservative 🛡️', 'Moderate ⚖️', 'Aggressive 🚀'],
+  },
 ];
 
 // ─── Advisor Card ────────────────────────────────────────────────────────────
@@ -54,12 +93,12 @@ function parseAmountINR(input) {
 
 // ─── Step Value Setter with Validation ──────────────────────────────────────
 function setStepValue(session, key, rawMessage) {
+  // Numeric fields (salary + expenses)
   if (['monthly_salary', 'basic_needs', 'bills_payments', 'personal_spending', 'extra_unexpected'].includes(key)) {
     const amount = parseAmountINR(rawMessage);
-    if (amount === null) return { valid: false, error: 'Please share the amount in numbers (example: 25000 or 25k).' };
+    if (amount === null) return { valid: false, error: 'Just the number is fine — like 25000 or 25k 😊' };
     const validation = financeService.validateProfileField(key, amount);
     if (!validation.valid) return validation;
-
     if (key === 'monthly_salary') {
       session.profile.monthly_salary = amount;
     } else {
@@ -69,30 +108,101 @@ function setStepValue(session, key, rawMessage) {
   }
 
   const cleaned = String(rawMessage || '').trim();
+
+  // Risk profile — extract from chip labels like "Conservative 🛡️"
+  if (key === 'risk_profile') {
+    const riskMap = { conservative: 'conservative', moderate: 'moderate', aggressive: 'aggressive' };
+    const lower = cleaned.toLowerCase();
+    const matched = Object.keys(riskMap).find(r => lower.includes(r));
+    if (!matched) return { valid: false, error: 'Pick one: Conservative, Moderate, or Aggressive 😊' };
+    session.profile.risk_profile = matched;
+    return { valid: true };
+  }
+
+  // Age bracket — extract from chip or freeform
+  if (key === 'age_bracket') {
+    const brackets = ['22-25', '26-30', '31-35', '36-40', '41-50', '50+'];
+    const matched = brackets.find(b => cleaned.includes(b));
+    if (matched) { session.profile.age_bracket = matched; return { valid: true }; }
+    // Try parsing a raw age number
+    const ageNum = parseInt(cleaned);
+    if (ageNum >= 18 && ageNum <= 80) {
+      const bracket = brackets.find(b => {
+        if (b === '50+') return ageNum >= 50;
+        const [lo, hi] = b.split('-').map(Number);
+        return ageNum >= lo && ageNum <= hi;
+      }) || '26-30';
+      session.profile.age_bracket = bracket;
+      return { valid: true };
+    }
+    return { valid: false, error: 'Just pick your age group or type your age 😊' };
+  }
+
+  // Goal — extract from chip labels (strip emoji)
+  if (key === 'goal') {
+    const goalText = cleaned.replace(/[\u{1F300}-\u{1FAD6}\u{2600}-\u{26FF}\u{2700}-\u{27BF}]/gu, '').trim();
+    if (goalText.length < 2) return { valid: false, error: 'Tell me about your financial dream — even a few words work!' };
+    session.profile.goal = goalText;
+    return { valid: true };
+  }
+
+  // Phone (post-analysis)
+  if (key === 'phone') {
+    const digits = cleaned.replace(/\D/g, '').slice(-10);
+    const validation = financeService.validateProfileField('phone', digits);
+    if (!validation.valid) return validation;
+    session.profile.phone = digits;
+    return { valid: true };
+  }
+
+  // Address (optional post-analysis)
+  if (key === 'address') {
+    session.profile.address = cleaned;
+    return { valid: true };
+  }
+
+  // Generic text fields (name)
   const validation = financeService.validateProfileField(key, cleaned);
   if (!validation.valid) return validation;
-
-  if (key === 'risk_profile') {
-    session.profile.risk_profile = cleaned.toLowerCase();
-  } else {
-    session.profile[key] = cleaned;
-  }
+  session.profile[key] = cleaned;
   return { valid: true };
 }
 
-// ─── Step Metadata Builder ──────────────────────────────────────────────────
-function buildStepMeta(index) {
-  const step = STEPS[index];
-  return step
-    ? { index, total: STEPS.length, field: step.key }
-    : null;
+// ─── Dynamic Suggestion Builder ─────────────────────────────────────────────
+function buildSuggestions(step, profile) {
+  if (!step) return [];
+  if (step.suggestions === 'dynamic') {
+    return financeService.getExpenseSuggestions(profile.monthly_salary, step.key);
+  }
+  return step.suggestions || [];
 }
 
-// ─── Missing Fields Checker ─────────────────────────────────────────────────
-function missingFields(profile) {
-  const required = ['name', 'address', 'phone', 'monthly_salary', 'goal', 'risk_profile'];
-  const missing = required.filter((k) => !profile[k]);
+// ─── Question Personalizer (inject profile data into question templates) ─────
+function personalizeQuestion(question, profile) {
+  return question
+    .replace(/\{\{name\}\}/g, profile.name || 'friend')
+    .replace(/\{\{goal\}\}/g, profile.goal || 'financial goal');
+}
 
+// ─── Step Metadata Builder ──────────────────────────────────────────────────
+function buildStepMeta(index, profile) {
+  const step = STEPS[index];
+  if (!step) return null;
+  const suggestions = buildSuggestions(step, profile || {});
+  return {
+    index, total: STEPS.length, field: step.key,
+    type: step.type || 'text',
+    suggestions,
+    phase_label: step.phase_label || 'Building your plan',
+    hint: step.type === 'choice_or_text' ? 'Or type your own answer...' :
+          step.type === 'choice' ? 'Tap to select' : 'Type your answer...',
+  };
+}
+
+// ─── Missing Fields Checker (phone/address NOT required for analysis) ────────
+function missingFields(profile) {
+  const required = ['name', 'monthly_salary', 'goal', 'risk_profile', 'age_bracket'];
+  const missing = required.filter((k) => !profile[k]);
   const expenseFields = ['basic_needs', 'bills_payments', 'personal_spending', 'extra_unexpected'];
   for (const f of expenseFields) {
     if (profile.expenses[f] === null || profile.expenses[f] === undefined) missing.push(f);
@@ -105,11 +215,11 @@ function buildLeadSummary(profile, plan) {
   const expenses = profile.expenses || {};
   const totalExpenses = (expenses.basic_needs || 0) + (expenses.bills_payments || 0) +
                         (expenses.personal_spending || 0) + (expenses.extra_unexpected || 0);
-
   return {
     name: profile.name,
-    address: profile.address,
-    phone: profile.phone,
+    age_bracket: profile.age_bracket,
+    phone: profile.phone || null,
+    address: profile.address || null,
     monthly_salary: profile.monthly_salary,
     expense_breakdown: {
       basic_needs: expenses.basic_needs || 0,
@@ -124,7 +234,6 @@ function buildLeadSummary(profile, plan) {
       `Monthly salary: ₹${financeService.formatINR(profile.monthly_salary)}`,
       `Total monthly expenses: ₹${financeService.formatINR(totalExpenses)}`,
       `Savings rate: ${plan.totals.savings_rate}%`,
-      `Potential monthly savings buffer: ₹${financeService.formatINR(plan.totals.suggested_savings)}`,
       `Recommended monthly SIP: ₹${financeService.formatINR(plan.totals.recommended_sip_for_projection || plan.totals.investable_amount)}`,
       `MF Split: Flexi Cap ${Math.round(plan.fund_mix.flexi_cap * 100)}%, Mid Cap ${Math.round(plan.fund_mix.mid_cap * 100)}%, Small Cap ${Math.round(plan.fund_mix.small_cap * 100)}%`,
       plan.goal_projection ? plan.goal_projection.motivation : '',
@@ -177,23 +286,70 @@ async function startSession(req, res) {
     const session = sessionStore.createNewSession(userId, name);
     if (name) session.profile.name = name;
 
-    const msg = name
-      ? `Welcome ${name}! 🎯 I'm your PMS wealth assistant. Let's understand your finances and build a smart investment plan.\n\n${STEPS[1].question}`
-      : STEPS[0].question;
+    const firstStep = name ? STEPS[1] : STEPS[0];
+    const startIndex = name ? 1 : 0;
     if (name) session.currentStep = 1;
 
+    const msg = name
+      ? personalizeQuestion(firstStep.question, session.profile)
+      : firstStep.question;
+
     sessionStore.addMessage(session.id, 'assistant', msg);
+
+    // Endowed Progress: start at 15% so users feel they've already begun
+    const progress = Math.max(15, Math.round((session.currentStep / STEPS.length) * 100));
 
     return res.json({
       sessionId: session.id,
       message: msg,
       phase: 'collect',
-      step: buildStepMeta(session.currentStep),
-      progress: Math.round((session.currentStep / STEPS.length) * 100),
+      step: buildStepMeta(session.currentStep, session.profile),
+      progress,
     });
   } catch (err) {
     console.error('[startSession]', err);
-    return res.status(500).json({ error: 'Failed to start session.' });
+    const isProd = String(process.env.NODE_ENV || '').toLowerCase() === 'production';
+    const allowDetails = !isProd || String(process.env.DEBUG_ERRORS || '').toLowerCase() === 'true' || process.env.DEBUG_ERRORS === '1';
+    // Avoid leaking internals in production unless DEBUG_ERRORS is explicitly enabled.
+    return res.status(500).json({
+      error: 'Failed to start session.',
+      ...(allowDetails ? { detail: err && err.message ? String(err.message) : 'Unknown error' } : {}),
+    });
+  }
+}
+
+// ─── Generate Mid-Conversation Hook via LLM ────────────────────────────────
+async function generateHook(session, hookContext) {
+  try {
+    const partialContext = buildPartialProfileContext(session.profile);
+    const prompt = MID_CONVERSATION_HOOK_PROMPT
+      .replace('{{PARTIAL_PROFILE}}', partialContext)
+      .replace('{{HOOK_CONTEXT}}', hookContext);
+    const response = await groqService.chat(
+      [{ role: 'system', content: prompt }, { role: 'user', content: 'Generate the hook insight.' }],
+      { temperature: 0.6, maxTokens: 200 }
+    );
+    return response;
+  } catch (e) {
+    console.error('[generateHook]', e.message);
+    return null; // Non-fatal — skip hook if LLM fails
+  }
+}
+
+// ─── Generate LLM Transition Message ────────────────────────────────────────
+async function generateTransition(session, justAnswered, nextQuestion) {
+  try {
+    const partialContext = buildPartialProfileContext(session.profile);
+    const systemPrompt = COLLECTION_PROMPT;
+    const userMsg = `The user just answered the "${justAnswered}" question. Their partial profile:\n${partialContext}\n\nGenerate a warm, natural 1-2 sentence transition, then ask this next question:\n"${nextQuestion}"\n\nIMPORTANT: Keep it SHORT. Max 3 sentences total including the question. Do NOT repeat the question word-for-word — weave it naturally.`;
+    const response = await groqService.chat(
+      [{ role: 'system', content: systemPrompt }, { role: 'user', content: userMsg }],
+      { temperature: 0.65, maxTokens: 250 }
+    );
+    return response;
+  } catch (e) {
+    console.error('[generateTransition]', e.message);
+    return null; // Fallback to template
   }
 }
 
@@ -204,22 +360,25 @@ async function handleCollectPhase(session, userMessage) {
 
   // If user asks a question mid-collection, answer it then re-ask
   if (isQuestion(userMessage)) {
+    const q = personalizeQuestion(step.question, session.profile);
+    const progress = Math.max(15, Math.round((session.currentStep / STEPS.length) * 100));
     return {
-      message: await answerGeneralQuestion(session, userMessage, `Now, ${step.question}`),
+      message: await answerGeneralQuestion(session, userMessage, `Now, ${q}`),
       phase: 'collect',
-      step: buildStepMeta(session.currentStep),
-      progress: Math.round((session.currentStep / STEPS.length) * 100),
+      step: buildStepMeta(session.currentStep, session.profile),
+      progress,
     };
   }
 
   // Validate and set the value
   const result = setStepValue(session, step.key, userMessage);
   if (!result.valid) {
+    const progress = Math.max(15, Math.round((session.currentStep / STEPS.length) * 100));
     return {
-      message: `${result.error} ${step.question}`,
+      message: result.error,
       phase: 'collect',
-      step: buildStepMeta(session.currentStep),
-      progress: Math.round((session.currentStep / STEPS.length) * 100),
+      step: buildStepMeta(session.currentStep, session.profile),
+      progress,
       invalid: true,
     };
   }
@@ -230,37 +389,59 @@ async function handleCollectPhase(session, userMessage) {
   // More steps to go
   if (session.currentStep < STEPS.length) {
     const nextStep = STEPS[session.currentStep];
-    // Personalize transition messages based on which step we're moving to
-    let prefix = 'Noted. ';
+    const nextQuestion = personalizeQuestion(nextStep.question, session.profile);
+    const progress = Math.max(15, Math.round((session.currentStep / STEPS.length) * 100));
+    const remaining = STEPS.length - session.currentStep;
     const exp = session.profile.expenses || {};
+    let hookMessage = null;
+    let message = '';
 
-    if (session.currentStep === 4) {
-      // Moving from salary → first expense
-      prefix = `Got it, ₹${financeService.formatINR(session.profile.monthly_salary)} salary. Now let's understand your expenses across 4 categories — one by one.\n\n📌 **Category 1 of 4:**\n`;
-    } else if (session.currentStep === 5) {
-      // After basic needs → bills
-      prefix = `✅ Basic Needs: ₹${financeService.formatINR(exp.basic_needs || 0)}/month\n\n📌 **Category 2 of 4:**\n`;
-    } else if (session.currentStep === 6) {
-      // After bills → personal spending
-      const runningTotal = (exp.basic_needs || 0) + (exp.bills_payments || 0);
-      prefix = `✅ Bills & Payments: ₹${financeService.formatINR(exp.bills_payments || 0)}/month (Running total: ₹${financeService.formatINR(runningTotal)})\n\n📌 **Category 3 of 4:**\n`;
-    } else if (session.currentStep === 7) {
-      // After personal spending → extra
-      const runningTotal = (exp.basic_needs || 0) + (exp.bills_payments || 0) + (exp.personal_spending || 0);
-      prefix = `✅ Personal Spending: ₹${financeService.formatINR(exp.personal_spending || 0)}/month (Running total: ₹${financeService.formatINR(runningTotal)})\n\n📌 **Category 4 of 4 — last one!**\n`;
-    } else if (session.currentStep === 8) {
-      // After all 4 expenses → goal
+    // ── Psychology Hooks at strategic moments ──
+    // After salary: income percentile insight
+    if (step.key === 'monthly_salary') {
+      const pct = financeService.getIncomePercentile(session.profile.monthly_salary);
+      hookMessage = await generateHook(session,
+        `User just shared salary of ₹${financeService.formatINR(session.profile.monthly_salary)}. They earn more than ${pct}% of Indians. Create a brief encouraging insight about their income position and tease what we'll discover about their expense patterns.`
+      );
+    }
+    // After all 4 expenses: dramatic surplus reveal
+    else if (step.key === 'extra_unexpected') {
       const totalExp = (exp.basic_needs || 0) + (exp.bills_payments || 0) + (exp.personal_spending || 0) + (exp.extra_unexpected || 0);
       const surplus = (session.profile.monthly_salary || 0) - totalExp;
-      prefix = `✅ All expenses captured!\n\n💰 **Your monthly snapshot:**\nSalary: ₹${financeService.formatINR(session.profile.monthly_salary)} | Expenses: ₹${financeService.formatINR(totalExp)} | Surplus: ₹${financeService.formatINR(surplus)}\n\nNow let's set your goals.\n\n`;
+      const annualIdle = financeService.inflationLossPerYear(surplus * 12);
+      hookMessage = await generateHook(session,
+        `All 4 expense categories done. Total expenses: ₹${financeService.formatINR(totalExp)}. Monthly surplus: ₹${financeService.formatINR(surplus)}. Annual surplus sitting idle: ₹${financeService.formatINR(surplus * 12)}, losing ~₹${financeService.formatINR(annualIdle)} to inflation per year. Create a dramatic but encouraging reveal about their wealth-building potential. Use loss framing.`
+      );
+    }
+    // After personal spending: benchmark comparison
+    else if (step.key === 'personal_spending') {
+      const bench = financeService.getExpenseBenchmark(session.profile.monthly_salary, 'personal_spending');
+      if (bench) {
+        const actualPct = Math.round((exp.personal_spending / session.profile.monthly_salary) * 100);
+        hookMessage = await generateHook(session,
+          `User spends ₹${financeService.formatINR(exp.personal_spending)} on lifestyle (${actualPct}% of income). Average for their salary bracket is ${bench.average_pct}% (~₹${financeService.formatINR(bench.average_amount)}). Create a brief non-judgmental comparison.`
+        );
+      }
     }
 
-    return {
-      message: `${prefix}${nextStep.question}`,
+    // Try LLM transition, fallback to template
+    const llmTransition = await generateTransition(session, step.key, nextQuestion);
+    message = llmTransition || nextQuestion;
+
+    const response = {
+      message,
       phase: 'collect',
-      step: buildStepMeta(session.currentStep),
-      progress: Math.round((session.currentStep / STEPS.length) * 100),
+      step: buildStepMeta(session.currentStep, session.profile),
+      progress,
+      countdown: remaining <= 3 ? `${remaining} question${remaining === 1 ? '' : 's'} left 🔓` : null,
     };
+
+    // Attach hook as separate field for frontend to render as milestone card
+    if (hookMessage) {
+      response.hookMessage = hookMessage;
+    }
+
+    return response;
   }
 
   // ─── All steps complete → Generate analysis ────────────────────────────────
@@ -268,7 +449,7 @@ async function handleCollectPhase(session, userMessage) {
   const advisor = getAdvisorCard();
   const summary = buildLeadSummary(session.profile, plan);
 
-  // Save lead to MongoDB
+  // Save lead to MongoDB (phone/address collected post-analysis)
   try {
     if (process.env.MONGODB_URI) {
       await Lead.updateOne(
@@ -277,10 +458,10 @@ async function handleCollectPhase(session, userMessage) {
           $set: {
             userId: session.userId,
             name: session.profile.name,
-            phone: session.profile.phone,
-            address: session.profile.address,
             sessionId: session.id,
             monthlySalary: session.profile.monthly_salary,
+            goal: session.profile.goal,
+            riskProfile: session.profile.risk_profile,
             keyFinancialInsights: summary.key_financial_insights,
             peakInsight: summary.key_financial_insights.join(' | '),
             conversationCompletedAt: new Date(),
@@ -305,51 +486,44 @@ async function handleCollectPhase(session, userMessage) {
     analysis: { plan, lead_summary: summary, advisor },
   });
 
-  // Build the rich analysis response message
+  // Build the analysis response message
   const projectionText = plan.projections
-    .map((p) => `📊 **${p.years}Y**: Invest ₹${financeService.formatINR(p.monthly_investment)}/month → Expected ${p.expected_value_formatted}`)
+    .map((p) => `📊 **${p.years}Y**: ₹${financeService.formatINR(p.monthly_investment)}/mo → ${p.expected_value_formatted}`)
     .join('\n');
 
   const categoryBreakdown = plan.category_optimization
-    .map(c => `${c.icon} ${c.label}: ₹${financeService.formatINR(c.amount)} (${c.actual_pct}% of income)${c.is_over_budget ? ' ⚠️' : ' ✅'}`)
+    .map(c => `${c.icon} ${c.label}: ₹${financeService.formatINR(c.amount)} (${c.actual_pct}%)${c.is_over_budget ? ' ⚠️' : ' ✅'}`)
     .join('\n');
 
-  const fundMixText = `Flexi Cap: ${Math.round(plan.fund_mix.flexi_cap * 100)}% (₹${financeService.formatINR(plan.fund_mix_amounts.flexi_cap)}), Mid Cap: ${Math.round(plan.fund_mix.mid_cap * 100)}% (₹${financeService.formatINR(plan.fund_mix_amounts.mid_cap)}), Small Cap: ${Math.round(plan.fund_mix.small_cap * 100)}% (₹${financeService.formatINR(plan.fund_mix_amounts.small_cap)})`;
-
-  const insightsText = plan.expense_insights.join('\n');
-  const projectionBasisNote = plan.totals.projection_basis === 'post_optimization'
-    ? 'Note: SIP and projections are based on the post-optimization plan (after reducing Personal Spending and Extra / Unexpected).'
-    : 'Note: SIP and projections are based on your current surplus.';
+  const sipAmount = plan.totals.recommended_sip_for_projection || plan.totals.investable_amount;
 
   return {
     phase: 'freeform',
     progress: 100,
     analysis: { plan, lead_summary: summary, advisor },
     profile: session.profile,
+    show_advisor_card: true,
+    // Post-analysis lead capture: ask for phone to save the plan
+    leadCapture: {
+      prompt: `Your financial roadmap is ready! 🎉 Want me to save it and have our advisor reach out with specific fund recommendations?`,
+      suggestions: ['Yes, save my plan! 📱', 'Maybe later'],
+      field: 'phone',
+    },
     message: [
-      `🎉 **Your PMS Financial Profile is ready, ${session.profile.name}!**`,
+      `🎉 **${session.profile.name}, your personalized financial roadmap is ready!**`,
       '',
-      `💰 **Monthly Summary**`,
-      `Salary: ₹${financeService.formatINR(plan.totals.monthly_salary)} | Expenses: ₹${financeService.formatINR(plan.totals.total_expenses)} | Surplus: ₹${financeService.formatINR(plan.totals.monthly_surplus)} (${plan.totals.savings_rate}% savings rate)`,
+      `💰 **Monthly Snapshot**`,
+      `Income: ₹${financeService.formatINR(plan.totals.monthly_salary)} → Expenses: ₹${financeService.formatINR(plan.totals.total_expenses)} → **Surplus: ₹${financeService.formatINR(plan.totals.monthly_surplus)}** (${plan.totals.savings_rate}% savings rate)`,
       '',
-      `📋 **Expense Breakdown**`,
+      `📋 **Where Your Money Goes**`,
       categoryBreakdown,
       '',
-      `💡 **Insights**`,
-      insightsText,
-      '',
-      `📈 **Investment Plan** (SIP: ₹${financeService.formatINR(plan.totals.recommended_sip_for_projection || plan.totals.investable_amount)}/month)`,
-      projectionBasisNote,
-      `Fund Split: ${fundMixText}`,
-      '',
-      `🔮 **Projections**`,
+      `📈 **Your Investment Plan** (SIP: ₹${financeService.formatINR(sipAmount)}/month)`,
       projectionText,
       '',
       `🎯 **Goal**: ${plan.goal_projection.motivation}`,
       '',
-      `👨‍💼 **Your Advisor**: ${advisor.name} (${advisor.registration}) | ${advisor.phone} | ${advisor.email}`,
-      '',
-      '💬 You can now ask me any finance question and I\'ll answer based on your profile!',
+      `💬 Ask me anything about your finances — I'll answer using your actual numbers!`,
     ].join('\n'),
   };
 }
@@ -426,8 +600,8 @@ function getSessionState(req, res) {
     phase: session.phase,
     profile: session.profile,
     analysis: session.analysis,
-    step: buildStepMeta(session.currentStep),
-    progress: Math.round((session.currentStep / STEPS.length) * 100),
+    step: buildStepMeta(session.currentStep, session.profile),
+    progress: Math.max(15, Math.round((session.currentStep / STEPS.length) * 100)),
     history: session.history,
   });
 }
