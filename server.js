@@ -103,7 +103,8 @@ if (process.env.MONGODB_URI) {
 
 // ─── App Init ─────────────────────────────────────────────────────────────────
 const app  = express();
-const PORT = parseInt(process.env.PORT) || 3000;
+const INITIAL_PORT = parseInt(process.env.PORT) || 3000;
+let PORT = INITIAL_PORT;
 const isDev = process.env.NODE_ENV !== 'production';
 
 // Trust reverse proxy headers in production hosting (Render, etc.).
@@ -225,7 +226,7 @@ app.use(notFoundHandler);
 app.use(globalErrorHandler);
 
 // ─── Start Server ─────────────────────────────────────────────────────────────
-const server = app.listen(PORT, () => {
+let server = app.listen(PORT, () => {
   console.log('\n\x1b[32m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\x1b[0m');
   console.log('\x1b[33m  FinanceAI Chatbot Backend\x1b[0m  ✦ Powered by Groq');
   console.log('\x1b[32m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\x1b[0m');
@@ -243,6 +244,28 @@ const server = app.listen(PORT, () => {
 // Handle listen errors (prevents unhandled 'error' event crashes)
 server.on('error', (err) => {
   if (err && err.code === 'EADDRINUSE') {
+    if (isDev) {
+      const maxTries = 10;
+      for (let i = 1; i < maxTries; i++) {
+        const nextPort = INITIAL_PORT + i;
+        console.warn(`\x1b[33m[Port In Use]\x1b[0m Port ${PORT} is busy. Retrying on ${nextPort}...`);
+        PORT = nextPort;
+        try {
+          server = app.listen(PORT, () => {
+            console.log(`\x1b[32m[Server]\x1b[0m Listening on http://localhost:${PORT}`);
+            console.log(`\x1b[32m[Server]\x1b[0m API base: http://localhost:${PORT}/api`);
+            console.log(`\x1b[32m[Server]\x1b[0m Health:   http://localhost:${PORT}/health`);
+          });
+          return;
+        } catch (_) {
+          // keep trying
+        }
+      }
+      console.error(`\x1b[31m[STARTUP ERROR]\x1b[0m Port ${INITIAL_PORT} (and next ${maxTries - 1} ports) are in use.`);
+      console.error('Close the other process using these ports, or set PORT in .env and restart.');
+      process.exit(1);
+    }
+
     console.error(`\x1b[31m[STARTUP ERROR]\x1b[0m Port ${PORT} is already in use.`);
     console.error('Close the other process using this port, or change PORT in .env and restart.');
     process.exit(1);

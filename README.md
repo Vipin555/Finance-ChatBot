@@ -55,6 +55,8 @@ npm start          # production
 Server starts at: `http://localhost:3000`
 Frontend harness: `http://localhost:3000` (serves `index.html` from the same Express app)
 
+If `3000` is already in use (common if you run a Next.js frontend on `3000`), the backend will automatically try `3001`, `3002`, ... up to `3009` in development. Use the URL printed in the backend logs, or open the harness with `?apiBase=http://localhost:3001/api/chat` (adjust the port).
+
 ### 3. Run API smoke tests
 
 ```bash
@@ -180,7 +182,7 @@ All prompts are in **`src/prompts/system.js`**:
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `GROQ_API_KEY` | *(required)* | Your Groq API key |
-| `PORT` | `3000` | Server port |
+| `PORT` | `3000` | Server port (in development, if this port is busy the server will try `PORT+1` up to `PORT+9`) |
 | `NODE_ENV` | `development` | `development` or `production` |
 | `CORS_ORIGINS` | (localhost) | Comma-separated allowed origins |
 | `RATE_LIMIT_MAX_REQUESTS` | `30` | Requests per minute per IP |

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="dark">
+  <html lang="en">
 
 <head>
   <meta charset="UTF-8" />
@@ -139,6 +139,19 @@
 	    const _apiFromQuery = new URLSearchParams(window.location.search).get('apiBase');
 	    const API_BASE = normalizeApiBase(_apiFromQuery || window.FINANCEAI_API_BASE || _apiMeta || '/api/chat');
 
+    // Theme helpers
+    function getPreferredTheme() {
+      // Prefer user's OS setting when no explicit theme is provided.
+      // Defaults to dark if matchMedia is unavailable.
+      try {
+        return window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches
+          ? 'light'
+          : 'dark';
+      } catch (_) {
+        return 'dark';
+      }
+    }
+
     // Embed mode (used when shown inside Planitt via iframe)
     (function initEmbedMode() {
       const params = new URLSearchParams(window.location.search);
@@ -146,11 +159,15 @@
       const isEmbedded = embed === 'planitt' || (window.self !== window.top);
       if (isEmbedded) document.documentElement.setAttribute('data-embed', 'true');
 
-      // In embed mode we follow the host app's dark theme by default.
+      // In embed mode we follow the host app by default.
       // You can override via `?theme=light|dark`.
       const explicitTheme = params.get('theme');
       if (explicitTheme === 'light' || explicitTheme === 'dark') {
         document.documentElement.setAttribute('data-theme', explicitTheme);
+      } else if (isEmbedded && !document.documentElement.getAttribute('data-theme')) {
+        // If embedded and no explicit theme is set, use OS preference so light hosts
+        // don't end up with dark tokens on a white background.
+        document.documentElement.setAttribute('data-theme', getPreferredTheme());
       }
     })();
 
@@ -1378,9 +1395,9 @@
     document.addEventListener('DOMContentLoaded', () => {
       // Theme
       const isEmbedded = document.documentElement.getAttribute('data-embed') === 'true';
-      const savedTheme = localStorage.getItem('financeai_theme') || 'dark';
+      const savedTheme = localStorage.getItem('financeai_theme') || getPreferredTheme();
       if (!document.documentElement.getAttribute('data-theme')) {
-        document.documentElement.setAttribute('data-theme', savedTheme);
+        document.documentElement.setAttribute('data-theme', isEmbedded ? getPreferredTheme() : savedTheme);
       }
 
       document.getElementById('theme-toggle').addEventListener('click', () => {
@@ -1420,5 +1437,4 @@
 </body>
 
 </html>
-
 
