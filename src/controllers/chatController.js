@@ -25,7 +25,7 @@ const STEPS = [
   {
     key: 'age_bracket', type: 'choice', phase_label: 'Understanding you',
     question: "Quick one — which age group are you in? This helps me pick the right investment horizon for your **{{goal}}**.",
-    suggestions: ['22-25', '26-30', '31-35', '36-40', '41-50', '50+'],
+    suggestions: ['18-21', '22-25', '26-30', '31-35', '36-40', '41-50', '50+'],
   },
   {
     key: 'monthly_salary', type: 'choice_or_text', phase_label: 'Analyzing income',
@@ -40,7 +40,7 @@ const STEPS = [
   {
     key: 'bills_payments', type: 'choice_or_text', phase_label: 'Mapping expenses',
     question: "📌 **Expense 2/4: Fixed Commitments**\n\nEMIs, insurance, utilities, phone/internet bills?",
-    suggestions: ['₹0 (no EMIs)', '₹5,000-10,000', '₹10,000-20,000', '₹20,000-50,000'],
+    suggestions: ['₹0 (no EMIs)', '₹1,000-5,000', '₹5,000-10,000', '₹10,000-20,000', '₹20,000-50,000'],
   },
   {
     key: 'personal_spending', type: 'choice_or_text', phase_label: 'Mapping expenses',
@@ -121,7 +121,7 @@ function setStepValue(session, key, rawMessage) {
 
   // Age bracket — extract from chip or freeform
   if (key === 'age_bracket') {
-    const brackets = ['22-25', '26-30', '31-35', '36-40', '41-50', '50+'];
+    const brackets = ['18-21', '22-25', '26-30', '31-35', '36-40', '41-50', '50+'];
     const matched = brackets.find(b => cleaned.includes(b));
     if (matched) { session.profile.age_bracket = matched; return { valid: true }; }
     // Try parsing a raw age number
