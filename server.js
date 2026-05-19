@@ -21,6 +21,7 @@ const express     = require('express');
 const cors        = require('cors');
 const helmet      = require('helmet');
 const mongoose    = require('mongoose');
+const dns         = require('dns');
 const cookieParser = require('cookie-parser');
 const path        = require('path');
 const rateLimit   = require('express-rate-limit');
@@ -61,33 +62,85 @@ if (missing.length > 0) {
 
 
 // ─── Database Connection ──────────────────────────────────────────────────────
-if (process.env.MONGODB_URI) {
-  const mongoConnectOptions = {
-    maxPoolSize: 10,
-    minPoolSize: 5,
-    socketTimeoutMS: 45000,
-    connectTimeoutMS: 30000,
-    serverSelectionTimeoutMS: 30000,
-    retryWrites: true,
-    waitQueueTimeoutMS: 10000,
-  };
+const mongoConnectOptions = {
+  maxPoolSize: 10,
+  minPoolSize: 5,
+  socketTimeoutMS: 45000,
+  connectTimeoutMS: 30000,
+  serverSelectionTimeoutMS: 30000,
+  retryWrites: true,
+  waitQueueTimeoutMS: 10000,
+};
 
-  mongoose.connect(process.env.MONGODB_URI, mongoConnectOptions)
-  .then(async () => {
-    console.log('\x1b[32m[Database]\x1b[0m Connected to MongoDB successfully.');
-    await seedInitialAdminUser();
-  })
-  .catch((err) => {
-    console.error('\x1b[31m[Database ERROR]\x1b[0m', err.message);
-    console.error(
-      '\x1b[33m[Connection Help]\x1b[0m:\n' +
-      '  1. Verify MongoDB URI in .env is correct\n' +
-      '  2. Check IP whitelist in MongoDB Atlas Network Access\n' +
-      '  3. Verify database user credentials\n' +
-      '  4. Ensure cluster is running (not paused)\n' +
-      '  5. Test: mongosh "' + (process.env.MONGODB_URI || '').split('@')[1] + '"'
-    );
-  });
+function buildMongoUriCandidates() {
+  const primary = String(process.env.MONGODB_URI || '').trim();
+  const fallback = String(process.env.MONGODB_URI_FALLBACK || '').trim();
+  return [primary, fallback].filter(Boolean);
+}
+
+function configureMongoDnsResolvers() {
+  const raw = String(process.env.MONGODB_DNS_SERVERS || '').trim();
+  if (!raw) return;
+  const servers = raw.split(',').map(s => s.trim()).filter(Boolean);
+  if (!servers.length) return;
+  try {
+    dns.setServers(servers);
+    console.log(`\x1b[36m[DNS]\x1b[0m Using custom DNS servers for MongoDB SRV lookup: ${servers.join(', ')}`);
+  } catch (e) {
+    console.error('\x1b[31m[DNS ERROR]\x1b[0m Failed to set custom DNS servers:', e.message);
+  }
+}
+
+function isSrvDnsError(err) {
+  const msg = String((err && err.message) || '').toLowerCase();
+  return msg.includes('querysrv') || msg.includes('enotfound') || msg.includes('eai_again');
+}
+
+function mongoHostHint(uri) {
+  if (!uri) return '(missing MONGODB_URI)';
+  const atIdx = uri.indexOf('@');
+  return atIdx >= 0 ? uri.slice(atIdx + 1) : uri;
+}
+
+async function connectMongoWithFallback() {
+  const candidates = buildMongoUriCandidates();
+  if (candidates.length === 0) return;
+
+  let lastErr = null;
+  for (let i = 0; i < candidates.length; i += 1) {
+    const uri = candidates[i];
+    const label = i === 0 ? 'primary' : 'fallback';
+    try {
+      await mongoose.connect(uri, mongoConnectOptions);
+      console.log(`\x1b[32m[Database]\x1b[0m Connected to MongoDB successfully (${label} URI).`);
+      await seedInitialAdminUser();
+      return;
+    } catch (err) {
+      lastErr = err;
+      console.error(`\x1b[31m[Database ERROR]\x1b[0m ${label} URI failed:`, err.message);
+      if (!(isSrvDnsError(err) && i < candidates.length - 1)) break;
+      console.warn('\x1b[33m[Database]\x1b[0m SRV DNS lookup failed on primary URI, trying fallback URI...');
+    }
+  }
+
+  const primary = candidates[0] || '';
+  console.error(
+    '\x1b[33m[Connection Help]\x1b[0m:\n' +
+    '  1. Verify MongoDB URI in .env is correct\n' +
+    '  2. Check IP whitelist in MongoDB Atlas Network Access\n' +
+    '  3. Verify database user credentials\n' +
+    '  4. Ensure cluster is running (not paused)\n' +
+    '  5. If SRV DNS fails, set MONGODB_URI_FALLBACK with Atlas standard URI (mongodb://...)\n' +
+    `  6. Test: mongosh "${mongoHostHint(primary)}"`
+  );
+  if (lastErr && isSrvDnsError(lastErr)) {
+    console.error('\x1b[33m[DNS Hint]\x1b[0m DNS lookup for Atlas SRV failed. Use MONGODB_URI_FALLBACK or switch DNS (1.1.1.1 / 8.8.8.8).');
+  }
+}
+
+if (process.env.MONGODB_URI) {
+  configureMongoDnsResolvers();
+  connectMongoWithFallback();
 
   // Handle connection events
   mongoose.connection.on('connected', () => {
