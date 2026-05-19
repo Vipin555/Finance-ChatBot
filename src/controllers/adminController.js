@@ -9,19 +9,34 @@ const { getJwtSecret } = require('../middleware/adminAuth');
 
 const COOKIE_NAME = 'admin_token';
 
-function setAuthCookie(res, token) {
+function resolveCookieOptions() {
   const isProd = process.env.NODE_ENV === 'production';
-  res.cookie(COOKIE_NAME, token, {
+  const rawSameSite = String(process.env.ADMIN_COOKIE_SAMESITE || (isProd ? 'none' : 'lax')).trim().toLowerCase();
+  const sameSite = rawSameSite === 'none' ? 'none' : 'lax';
+
+  // Browsers require Secure=true whenever SameSite=None is used.
+  const secure = sameSite === 'none' ? true : isProd;
+
+  return {
     httpOnly: true,
-    sameSite: 'lax',
-    secure: isProd,
+    sameSite,
+    secure,
     maxAge: 7 * 24 * 60 * 60 * 1000,
     path: '/',
-  });
+  };
+}
+
+function setAuthCookie(res, token) {
+  res.cookie(COOKIE_NAME, token, resolveCookieOptions());
 }
 
 function clearAuthCookie(res) {
-  res.clearCookie(COOKIE_NAME, { path: '/' });
+  const opts = resolveCookieOptions();
+  res.clearCookie(COOKIE_NAME, {
+    path: opts.path,
+    sameSite: opts.sameSite,
+    secure: opts.secure,
+  });
 }
 
 async function login(req, res) {
