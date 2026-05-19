@@ -58,6 +58,8 @@ if (missing.length > 0) {
   process.exit(1);
 }
 
+
+
 // ─── Database Connection ──────────────────────────────────────────────────────
 if (process.env.MONGODB_URI) {
   const mongoConnectOptions = {
@@ -281,9 +283,9 @@ if (mongoose.connection.readyState === 1) {
 
 // ─── Graceful Shutdown ────────────────────────────────────────────────────────
 function gracefulShutdown(signal) {
-  console.log(`\n[${signal}] Shutting down gracefully...`);
+  console.log(`\n[${signal}] Shutting down gracefully.....`);
   server.close(() => {
-    console.log('Server closed. Goodbye!');
+    console.log('Server closed. Goodbye!, come back soon! 👋');
     process.exit(0);
   });
   setTimeout(() => {
@@ -291,6 +293,7 @@ function gracefulShutdown(signal) {
     process.exit(1);
   }, 5000);
 }
+
 
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 process.on('SIGINT',  () => gracefulShutdown('SIGINT'));
