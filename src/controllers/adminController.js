@@ -41,14 +41,56 @@ function clearAuthCookie(res) {
 
 async function login(req, res) {
   const { username, password } = req.body || {};
-  if (!username || !password) return res.status(400).json({ error: 'username and password are required' });
+  if (!username || !password) {
+    return res.status(400).json({ error: 'username and password are required' });
+  }
 
   if (!process.env.MONGODB_URI) {
     return res.status(500).json({ error: 'MongoDB is not configured (missing MONGODB_URI).' });
   }
 
-  const limit = Math.min(parseInt(req.query.limit) || 200, 500);
+  const admin = await AdminUser.findOne({ username }).exec();
+  if (!admin) {
+    return res.status(401).json({ error: 'Invalid username or password' });
+  }
 
+  const passwordMatches = await bcrypt.compare(password, admin.passwordHash);
+  if (!passwordMatches) {
+    return res.status(401).json({ error: 'Invalid username or password' });
+  }
+
+  const payload = {
+    id: admin._id.toString(),
+    username: admin.username,
+    role: admin.role,
+  };
+
+  const token = jwt.sign(payload, getJwtSecret(), {
+    expiresIn: '7d',
+  });
+
+  admin.lastLoginAt = new Date();
+  await admin.save();
+
+  setAuthCookie(res, token);
+  return res.json({ username: admin.username, role: admin.role });
+}
+
+function logout(req, res) {
+  clearAuthCookie(res);
+  return res.json({ success: true });
+}
+
+function me(req, res) {
+  if (!req.admin) {
+    return res.status(401).json({ error: 'Not authenticated' });
+  }
+
+  return res.json({ username: req.admin.username, role: req.admin.role || 'admin' });
+}
+
+async function listLeads(req, res) {
+  const limit = Math.min(parseInt(req.query.limit) || 200, 500);
   const leads = await Lead.find(
     {},
     {
@@ -68,7 +110,6 @@ async function login(req, res) {
     .limit(limit)
     .lean()
     .exec();
-
 
   return res.json({ leads, total: leads.length });
 }
