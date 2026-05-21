@@ -33,8 +33,9 @@ function createSession(userId, name) {
     // ── Financial profile (populated step by step) ──
     profile: {
       name: null,
-      address: null,
-      phone: null,
+      age_bracket: null,     // '22-25', '26-30', etc.
+      phone: null,           // Collected post-analysis (reciprocity)
+      address: null,         // Optional, post-analysis
       monthly_salary: null,
       expenses: {
         basic_needs: null,
@@ -113,6 +114,7 @@ function getStats() {
   };
 }
 
+
 // ─── Periodic cleanup of expired sessions ─────────────────────────────────────
 setInterval(() => {
   const now = Date.now();
@@ -136,3 +138,4 @@ module.exports = {
   addMessage,
   getStats,
 };
+

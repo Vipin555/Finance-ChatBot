@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-  <html lang="en">
+<html lang="en" data-theme="dark">
 
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>FinanceAI  Personalized Wealth Intelligence</title>
   <meta name="description"
     content="Discover your personalized financial projections powered by AI. See exactly how much you could grow your wealth and connect with certified financial advisors." />
@@ -51,6 +51,15 @@
           <span class="live-dot" id="status-dot"></span>
           <span id="status-text">Connecting</span>
         </div>
+        <button id="theme-toggle" class="theme-btn" title="Toggle theme" aria-label="Toggle theme">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path
+              d="M12 18a6 6 0 1 0 0-12 6 6 0 0 0 0 12Z"
+              stroke="currentColor" stroke-width="2" />
+            <path d="M12 2v2M12 20v2M4 12H2M22 12h-2M5 5l-1.4-1.4M20.4 20.4 19 19M19 5l1.4-1.4M3.6 20.4 5 19"
+              stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+          </svg>
+        </button>
         <button id="restart-btn" class="restart-btn"> Restart</button>
       </div>
     </header>
@@ -113,52 +122,24 @@
     //  No Groq key needed here  key lives in backend .env
     // 
 
-	    // API base can be overridden when the UI is hosted separately from the backend.
-	    // Examples:
-	    //   http://localhost:3000                         -> default /api/chat (same origin)
-	    //   http://localhost/  (frontend) + backend :3000 -> ?apiBase=http://localhost:3000/api/chat
-	    // Also supported:
-	    //   window.FINANCEAI_API_BASE = 'https://api.example.com/api/chat'
-	    //   <meta name="financeai-api-base" content="https://api.example.com/api/chat">
-	    function normalizeApiBase(v) {
-	      if (!v) return v;
-	      const s = String(v).trim();
-	      return s.endsWith('/') ? s.slice(0, -1) : s;
-	    }
-
-	    const _apiMeta = document.querySelector('meta[name="financeai-api-base"]')?.getAttribute('content');
-	    const _apiFromQuery = new URLSearchParams(window.location.search).get('apiBase');
-	    const API_BASE = normalizeApiBase(_apiFromQuery || window.FINANCEAI_API_BASE || _apiMeta || '/api/chat');
-
-    // Theme helpers
-    function getPreferredTheme() {
-      // Prefer user's OS setting when no explicit theme is provided.
-      // Defaults to dark if matchMedia is unavailable.
-      try {
-        return window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches
-          ? 'light'
-          : 'dark';
-      } catch (_) {
-        return 'dark';
-      }
-    }
+    const API_BASE = '/api/chat';
 
     // Embed mode (used when shown inside Planitt via iframe)
     (function initEmbedMode() {
       const params = new URLSearchParams(window.location.search);
       const embed = params.get('embed');
       const isEmbedded = embed === 'planitt' || (window.self !== window.top);
-      if (isEmbedded) document.documentElement.setAttribute('data-embed', 'true');
+      if (isEmbedded) {
+        document.documentElement.setAttribute('data-embed', 'true');
+        // Lock embedded chatbot to dark for consistent contrast/readability.
+        document.documentElement.setAttribute('data-theme', 'dark');
+        return;
+      }
 
-      // In embed mode we follow the host app by default.
-      // You can override via `?theme=light|dark`.
+      // Standalone mode can still honor explicit query theme.
       const explicitTheme = params.get('theme');
       if (explicitTheme === 'light' || explicitTheme === 'dark') {
         document.documentElement.setAttribute('data-theme', explicitTheme);
-      } else if (isEmbedded && !document.documentElement.getAttribute('data-theme')) {
-        // If embedded and no explicit theme is set, use OS preference so light hosts
-        // don't end up with dark tokens on a white background.
-        document.documentElement.setAttribute('data-theme', getPreferredTheme());
       }
     })();
 
@@ -171,46 +152,30 @@
     let analysisRendered = false; // true after analysis cards are shown once
 
     //  API Client 
-	    async function apiPost(path, body = {}) {
-	      const res = await fetch(`${API_BASE}${path}`, {
-	        method: 'POST',
-	        headers: { 'Content-Type': 'application/json' },
-	        body: JSON.stringify(body),
-	      });
+    async function apiPost(path, body = {}) {
+      const res = await fetch(`${API_BASE}${path}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
 
-	      // Guard against non-JSON responses (e.g. from a Python dev server on wrong port)
-	      const contentType = res.headers.get('content-type') || '';
-	      if (!contentType.includes('application/json')) {
-	        let snippet = '';
-	        try { snippet = (await res.text()).slice(0, 180).replace(/\s+/g, ' ').trim(); } catch (_) {}
-	        const origin = `${location.protocol}//${location.host || '(no-host)'}`;
-	        const hint =
-	          `Non-JSON response (${res.status}) from ${origin}${API_BASE}${path}. ` +
-	          `If your backend runs on a different host/port, open the UI from the backend origin or set ?apiBase=http://HOST:PORT/api/chat.`;
-	        throw new Error(snippet ? `${hint} Response: ${snippet}` : hint);
-	      }
+      // Guard against non-JSON responses (e.g. from a Python dev server on wrong port)
+      const contentType = res.headers.get('content-type') || '';
+      if (!contentType.includes('application/json')) {
+        throw new Error(`Server at port ${location.port || '80'} returned non-JSON (${res.status}). Make sure you're on the correct URL/port for this deployment.`);
+      }
 
-	      const data = await res.json();
-	      if (!res.ok) throw Object.assign(new Error(data.error || 'API error'), { status: res.status, code: data.code });
-	      return data;
-	    }
+      const data = await res.json();
+      if (!res.ok) throw Object.assign(new Error(data.error || 'API error'), { status: res.status, code: data.code });
+      return data;
+    }
 
-	    async function apiGet(path) {
-	      const res = await fetch(`${API_BASE}${path}`);
-	      const contentType = res.headers.get('content-type') || '';
-	      if (!contentType.includes('application/json')) {
-	        let snippet = '';
-	        try { snippet = (await res.text()).slice(0, 180).replace(/\s+/g, ' ').trim(); } catch (_) {}
-	        const origin = `${location.protocol}//${location.host || '(no-host)'}`;
-	        const hint =
-	          `Non-JSON response (${res.status}) from ${origin}${API_BASE}${path}. ` +
-	          `If your backend runs on a different host/port, open the UI from the backend origin or set ?apiBase=http://HOST:PORT/api/chat.`;
-	        throw new Error(snippet ? `${hint} Response: ${snippet}` : hint);
-	      }
-	      const data = await res.json();
-	      if (!res.ok) throw new Error(data.error || 'API error');
-	      return data;
-	    }
+    async function apiGet(path) {
+      const res = await fetch(`${API_BASE}${path}`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'API error');
+      return data;
+    }
 
     //  Server Status Badge 
     function setServerStatus(state) {
@@ -254,51 +219,10 @@
         .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
     }
 
-    const SCROLL_BOTTOM_EPSILON = 48;
-    let isScrollPinnedToBottom = true;
-    let scrollRafId = null;
-
-    function isNearBottom(container) {
-      const distance = container.scrollHeight - container.scrollTop - container.clientHeight;
-      return distance <= SCROLL_BOTTOM_EPSILON;
-    }
-
-    function scheduleMessagesAutoScroll(opts = {}) {
-      const { force = false, smooth = true } = opts;
+    function scrollToBottom() {
       const msgs = document.getElementById('messages');
       if (!msgs) return;
-      if (!force && !isScrollPinnedToBottom && !isNearBottom(msgs)) return;
-      if (scrollRafId) return;
-
-      scrollRafId = requestAnimationFrame(() => {
-        scrollRafId = null;
-        msgs.scrollTo({
-          top: msgs.scrollHeight,
-          behavior: smooth ? 'smooth' : 'auto',
-        });
-      });
-    }
-
-    function initMessageAutoScroll() {
-      const msgs = document.getElementById('messages');
-      if (!msgs) return;
-
-      msgs.addEventListener('scroll', () => {
-        isScrollPinnedToBottom = isNearBottom(msgs);
-      }, { passive: true });
-
-      // Handles streaming/partial updates without scrolling the whole page.
-      const observer = new MutationObserver(() => {
-        scheduleMessagesAutoScroll({ force: false, smooth: false });
-      });
-
-      observer.observe(msgs, {
-        childList: true,
-        subtree: true,
-        characterData: true,
-      });
-
-      scheduleMessagesAutoScroll({ force: true, smooth: false });
+      msgs.scrollTo({ top: msgs.scrollHeight, behavior: 'smooth' });
     }
 
     //  Progress Bar 
@@ -312,7 +236,7 @@
     //  Typing Indicator 
     function showTyping(show) {
       document.getElementById('typing-indicator').classList.toggle('active', show);
-      scheduleMessagesAutoScroll({ force: true, smooth: true });
+      scrollToBottom();
     }
 
     //  Add Messages 
@@ -331,7 +255,7 @@
         <div class="bubble">${parseMarkdown(html)}</div>`;
       msgs.insertBefore(div, typing);
       showTyping(false);
-      scheduleMessagesAutoScroll({ force: true, smooth: true });
+      scrollToBottom();
     }
 
     function addUserMessage(text) {
@@ -341,14 +265,14 @@
       div.className = 'msg user';
       div.innerHTML = `<div class="bubble">${escapeHtml(text)}</div>`;
       msgs.insertBefore(div, typing);
-      scheduleMessagesAutoScroll({ force: true, smooth: true });
+      scrollToBottom();
     }
 
     function addElement(el) {
       const msgs = document.getElementById('messages');
       const typing = document.getElementById('typing-indicator');
       msgs.insertBefore(el, typing);
-      scheduleMessagesAutoScroll({ force: true, smooth: true });
+      scrollToBottom();
     }
 
     function buildLineGrowthCard(visual) {
@@ -454,7 +378,7 @@
     }
 
     //  Enrichment UI (insight + visual + suggested questions) 
-	    function buildSnapshotCard(data) {
+    function buildSnapshotCard(data) {
       const wrap = document.createElement('div');
       wrap.className = 'msg bot';
       wrap.style.cssText = 'max-width:100%;width:100%';
@@ -494,68 +418,94 @@
         card.appendChild(row);
       }
 
-	      wrap.appendChild(card);
-	      return wrap;
-	    }
+      wrap.appendChild(card);
+      return wrap;
+    }
 
-	    // Milestone / Hook card (short micro-insight during collection)
-	    function buildMilestoneCard(text) {
-	      const wrap = document.createElement('div');
-	      wrap.className = 'msg bot';
-	      wrap.style.cssText = 'max-width:100%;width:100%';
+    function buildMilestoneCard(hookMessage) {
+      const text = String(hookMessage || '').trim();
+      const wrap = document.createElement('div');
+      wrap.className = 'msg bot';
+      wrap.style.cssText = 'max-width:100%;width:100%';
 
-	      const card = document.createElement('div');
-	      card.className = 'snapshot-card';
-	      card.style.borderColor = 'rgba(245,197,24,0.25)';
+      if (!text) return wrap;
 
-	      card.innerHTML = `
-	        <div class="snapshot-header">
-	          <div class="snapshot-meta">Milestone</div>
-	          <div class="snapshot-badge" style="background:rgba(245,197,24,0.12);color:var(--gold-400);border:1px solid rgba(245,197,24,0.25)">INSIGHT</div>
-	        </div>
-		        <div class="snapshot-insight">${parseMarkdown(escapeHtml(String(text || '')))}</div>
-	      `;
+      const card = document.createElement('div');
+      card.className = 'milestone-card';
+      card.innerHTML = parseMarkdown(escapeHtml(text));
+      wrap.appendChild(card);
+      return wrap;
+    }
 
-	      wrap.appendChild(card);
-	      return wrap;
-	    }
+    function showCelebration() {
+      const msgs = document.getElementById('messages');
+      if (!msgs) return;
 
-	    // Post-analysis lead capture card (optional)
-	    function buildLeadCaptureCard(leadCapture) {
-	      const prompt = leadCapture?.prompt || 'Want to save your plan?';
-	      const suggestions = Array.isArray(leadCapture?.suggestions) ? leadCapture.suggestions : [];
+      const badge = document.createElement('div');
+      badge.style.cssText = `
+        align-self:center;
+        margin:0.25rem 0;
+        padding:0.38rem 0.75rem;
+        border-radius:999px;
+        border:1px solid var(--border-gold);
+        background:rgba(0,208,156,0.12);
+        color:var(--text-primary);
+        font-size:0.78rem;
+        font-weight:700;
+        letter-spacing:0.02em;
+        animation: fade-up 0.25s ease;
+      `;
+      badge.textContent = 'Checkpoint unlocked';
+      msgs.appendChild(badge);
+      scrollToBottom();
 
-	      const wrap = document.createElement('div');
-	      wrap.className = 'msg bot';
-	      wrap.style.cssText = 'max-width:100%;width:100%';
+      setTimeout(() => {
+        badge.style.transition = 'opacity .25s ease';
+        badge.style.opacity = '0';
+        setTimeout(() => badge.remove(), 260);
+      }, 1400);
+    }
 
-	      const card = document.createElement('div');
-	      card.className = 'snapshot-card';
+    function buildLeadCaptureCard(leadCapture) {
+      const data = leadCapture || {};
+      const prompt = String(data.prompt || 'Would you like to save your plan and continue with an advisor?').trim();
+      const suggestions = Array.isArray(data.suggestions) ? data.suggestions.slice(0, 3) : [];
 
-	      const row = document.createElement('div');
-	      row.className = 'suggestion-row compact';
+      const wrap = document.createElement('div');
+      wrap.className = 'msg bot';
+      wrap.style.cssText = 'max-width:100%;width:100%';
 
-	      suggestions.slice(0, 3).forEach((label) => {
-	        const chip = document.createElement('button');
-	        chip.className = 'suggestion-chip';
-	        chip.type = 'button';
-	        chip.textContent = label;
-	        chip.onclick = () => sendMessage(label, label);
-	        row.appendChild(chip);
-	      });
+      const card = document.createElement('div');
+      card.className = 'lead-capture-card';
 
-	      card.innerHTML = `
-	        <div class="snapshot-header">
-	          <div class="snapshot-meta">Next step</div>
-	          <div class="snapshot-badge" style="background:rgba(34,197,94,0.10);color:#22c55e;border:1px solid rgba(34,197,94,0.18)">SAVE</div>
-	        </div>
-	        <div class="snapshot-insight">${parseMarkdown(escapeHtml(String(prompt)))}</div>
-	      `;
-	      if (suggestions.length) card.appendChild(row);
+      const heading = document.createElement('h3');
+      heading.textContent = 'Next Step';
+      card.appendChild(heading);
 
-	      wrap.appendChild(card);
-	      return wrap;
-	    }
+      const copy = document.createElement('div');
+      copy.style.cssText = 'font-size:0.86rem;color:var(--text-secondary);line-height:1.55;margin-top:0.35rem';
+      copy.innerHTML = parseMarkdown(escapeHtml(prompt));
+      card.appendChild(copy);
+
+      if (suggestions.length > 0) {
+        const actions = document.createElement('div');
+        actions.style.cssText = 'display:flex;flex-wrap:wrap;gap:0.5rem;margin-top:0.9rem';
+
+        suggestions.forEach((choice) => {
+          const btn = document.createElement('button');
+          btn.type = 'button';
+          btn.className = 'chip';
+          btn.textContent = choice;
+          btn.onclick = () => sendMessage(choice, choice);
+          actions.appendChild(btn);
+        });
+
+        card.appendChild(actions);
+      }
+
+      wrap.appendChild(card);
+      return wrap;
+    }
 
     async function maybeShowAdvisorCard(data) {
       if (!data || !data.show_advisor_card) return;
@@ -1324,7 +1274,7 @@
       setServerStatus('connecting');
 
       showTyping(true);
-      await warmBackend();
+      await sleep(500);
 
       try {
         const data = await apiPost('/start', {});
@@ -1365,74 +1315,44 @@
       <div style="font-family:'Outfit',sans-serif;font-weight:700;font-size:1rem;color:#f87171;margin-bottom:0.5rem">
         Cannot reach the backend server
       </div>
-	      <div style="font-size:0.82rem;color:var(--text-secondary);line-height:1.6;margin-bottom:1rem">
-	        The UI could not start a chat session.<br/>
-	        <div style="margin-top:0.35rem">
-	          API base: <strong style="color:var(--gold-400)">${escapeHtml(API_BASE)}</strong>
-	        </div>
-	        <div style="margin-top:0.35rem">
-	          Endpoint: <strong style="color:var(--gold-400)">${origin}${API_BASE}/start</strong>
-	        </div>
-	      </div>
-	      <div style="font-size:0.78rem;color:var(--text-muted);line-height:1.6;margin-bottom:1rem">
-	        If your backend runs on a different host/port, open the UI from the backend origin or set <strong>?apiBase=http://HOST:PORT/api/chat</strong>.
-	      </div>
-	      <div style="font-size:0.78rem;color:var(--text-muted);line-height:1.6;margin-bottom:1rem">If this keeps happening, open DevTools → Network and check the status/response of <strong>${escapeHtml(API_BASE)}/start</strong>, then check your server logs.</div>${errMsg ? `<div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:1rem">Error: ${escapeHtml(errMsg)}</div>` : ''}
+      <div style="font-size:0.82rem;color:var(--text-secondary);line-height:1.6;margin-bottom:1rem">
+        The UI could not start a chat session.<br/>
+        <strong style="color:var(--gold-400)">${origin}${API_BASE}/start</strong></div>
+      <div style="font-size:0.78rem;color:var(--text-muted);line-height:1.6;margin-bottom:1rem">If this keeps happening, open DevTools  Network and check the status/response of <strong>/api/chat/start</strong>, then check your server logs.</div>${errMsg ? `<div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:1rem">Error: ${escapeHtml(errMsg)}</div>` : ''}
       <button onclick="initSession()" class="btn-gold" style="width:100%;padding:0.75rem">
          Retry Connection
       </button>
     </div>`;
       msgs.insertBefore(card, typing);
-      scheduleMessagesAutoScroll({ force: true, smooth: true });
-    }
-
-    function getBackendOrigin() {
-      try {
-        return new URL(API_BASE, window.location.href).origin;
-      } catch (_) {
-        return window.location.origin;
-      }
-    }
-
-    async function pingHealth() {
-      try {
-        const res = await fetch(`${getBackendOrigin()}/health`, { cache: 'no-store' });
-        if (!res.ok) return false;
-        const contentType = res.headers.get('content-type') || '';
-        if (!contentType.includes('application/json')) return false;
-        const data = await res.json();
-        return data && data.status === 'ok';
-      } catch (_) {
-        return false;
-      }
-    }
-
-    let healthHeartbeatId = null;
-
-    function startHealthHeartbeat() {
-      if (healthHeartbeatId) return;
-      const tick = () => { pingHealth(); };
-      tick();
-      healthHeartbeatId = setInterval(tick, 10 * 60 * 1000);
-    }
-
-    async function warmBackend() {
-      for (let attempt = 0; attempt < 5; attempt += 1) {
-        if (await pingHealth()) return true;
-        await sleep(1500);
-      }
-      return false;
+      scrollToBottom();
     }
 
     //  Event Listeners 
     document.addEventListener('DOMContentLoaded', () => {
       // Theme
       const isEmbedded = document.documentElement.getAttribute('data-embed') === 'true';
-      const savedTheme = localStorage.getItem('financeai_theme') || getPreferredTheme();
-      if (!document.documentElement.getAttribute('data-theme')) {
-        document.documentElement.setAttribute('data-theme', isEmbedded ? getPreferredTheme() : savedTheme);
+      if (isEmbedded) {
+        document.documentElement.setAttribute('data-theme', 'dark');
       }
-      initMessageAutoScroll();
+      const savedTheme = localStorage.getItem('financeai_theme') || 'dark';
+      if (!isEmbedded && !document.documentElement.getAttribute('data-theme')) {
+        document.documentElement.setAttribute('data-theme', savedTheme);
+      }
+
+      document.getElementById('theme-toggle').addEventListener('click', () => {
+        if (isEmbedded) return; // embedded mode is always dark
+        const next = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+        document.documentElement.setAttribute('data-theme', next);
+        localStorage.setItem('financeai_theme', next);
+        if (projChart) {
+          const isDark = next === 'dark';
+          const tc = isDark ? 'rgba(240,242,250,0.6)' : 'rgba(18,21,31,0.6)';
+          projChart.options.scales.x.ticks.color = tc;
+          projChart.options.scales.y.ticks.color = tc;
+          projChart.options.plugins.legend.labels.color = tc;
+          projChart.update();
+        }
+      });
 
       // Restart
       document.getElementById('restart-btn').addEventListener('click', initSession);
@@ -1449,11 +1369,13 @@
         sendBtn.disabled = chatInput.value.trim() === '' || isWaiting;
       });
 
-      startHealthHeartbeat();
+      // Start
       initSession();
     });
   </script>
 </body>
 
 </html>
+
+
 
