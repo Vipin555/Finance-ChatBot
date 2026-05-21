@@ -2,6 +2,7 @@
 
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const mongoose = require('mongoose');
 
 const Lead = require('../models/Lead');
 const AdminUser = require('../models/AdminUser');
@@ -114,10 +115,32 @@ async function listLeads(req, res) {
   return res.json({ leads, total: leads.length });
 }
 
+async function deleteLead(req, res) {
+  const { id } = req.params || {};
+
+  if (!mongoose.Types.ObjectId.isValid(id)) {
+    return res.status(400).json({ error: 'Invalid lead id' });
+  }
+
+  const deleted = await Lead.findByIdAndDelete(id).lean().exec();
+  if (!deleted) {
+    return res.status(404).json({ error: 'Lead not found' });
+  }
+
+  return res.json({ success: true, deletedId: id });
+}
+
+async function deleteAllLeads(req, res) {
+  const result = await Lead.deleteMany({}).exec();
+  return res.json({ success: true, deletedCount: result.deletedCount });
+}
+
 module.exports = {
   login,
   logout,
   me,
   listLeads,
+  deleteLead,
+  deleteAllLeads,
 };
 

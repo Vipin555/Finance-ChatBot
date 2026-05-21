@@ -165,6 +165,17 @@
   color: #f8fffb;
 }
 
+.admin-btn.danger {
+  border-color: rgba(248, 113, 113, 0.42);
+  background: rgba(127, 29, 29, 0.26);
+  color: #fee2e2;
+}
+
+.admin-btn.danger:hover {
+  border-color: rgba(248, 113, 113, 0.6);
+  background: rgba(127, 29, 29, 0.38);
+}
+
 .action-btn {
   margin-top: 0.85rem;
   width: 100%;
@@ -405,4 +416,3 @@
     gap: 0.85rem;
   }
 }
-

@@ -13,5 +13,7 @@ router.get('/me', adminAuth, controller.me);
 
 // Data
 router.get('/leads', adminAuth, controller.listLeads);
+router.delete('/leads', adminAuth, controller.deleteAllLeads);
+router.delete('/leads/:id', adminAuth, controller.deleteLead);
 
 module.exports = router;

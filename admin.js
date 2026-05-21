@@ -78,6 +78,12 @@ function renderLeads(leads) {
       return `<div class="small">${peak ? escapeHtml(String(peak)) : '—'}</div>`;
     })();
 
+    const leadId = String(lead._id || '');
+    const canDelete = leadId.length > 0;
+    const deleteButtonHtml = canDelete
+      ? `<button class="admin-btn danger js-delete-lead" type="button" data-lead-id="${escapeHtml(leadId)}">Delete</button>`
+      : `<button class="admin-btn danger" type="button" disabled title="Missing lead id">Delete</button>`;
+
     tr.innerHTML = `
       <td class="small">${convoText}</td>
       <td>${name}</td>
@@ -85,6 +91,7 @@ function renderLeads(leads) {
       <td>${address}</td>
       <td>${salary}</td>
       <td>${insightsHtml}</td>
+      <td>${deleteButtonHtml}</td>
     `;
 
     tbody.appendChild(tr);
@@ -173,17 +180,62 @@ async function onRefresh() {
   }
 }
 
-function onClear() {
-  if (!el('search')) return;
-  el('search').value = '';
-  applySearch();
+async function onClear() {
+  const isConfirmed = window.confirm('Are you sure you want to delete ALL leads? This action cannot be undone.');
+  if (!isConfirmed) return;
+
+  el('leads-error').textContent = '';
+  const btn = el('btn-clear');
+  const oldText = btn.textContent;
+
+  try {
+    btn.disabled = true;
+    btn.textContent = 'Clearing...';
+    await api('/api/admin/leads', { method: 'DELETE' });
+    ALL_LEADS = [];
+    if (el('search')) el('search').value = '';
+    applySearch();
+  } catch (err) {
+    el('leads-error').textContent = err.message;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = oldText;
+  }
+}
+
+async function onDeleteLeadClick(e) {
+  const btn = e.target.closest('.js-delete-lead');
+  if (!btn) return;
+
+  const leadId = btn.dataset.leadId;
+  if (!leadId) return;
+
+  const isConfirmed = window.confirm('Delete this lead permanently? This action cannot be undone.');
+  if (!isConfirmed) return;
+
+  const oldText = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Deleting...';
+  el('leads-error').textContent = '';
+
+  try {
+    await api(`/api/admin/leads/${encodeURIComponent(leadId)}`, { method: 'DELETE' });
+    ALL_LEADS = ALL_LEADS.filter((lead) => String(lead._id || '') !== leadId);
+    applySearch();
+  } catch (err) {
+    el('leads-error').textContent = err.message;
+    btn.disabled = false;
+    btn.textContent = oldText;
+  }
 }
 
 window.addEventListener('DOMContentLoaded', () => {
   el('login-form').addEventListener('submit', onLogin);
   el('btn-logout').addEventListener('click', onLogout);
   el('btn-refresh').addEventListener('click', onRefresh);
+  el('btn-review-new')?.addEventListener('click', onRefresh);
   el('btn-clear')?.addEventListener('click', onClear);
   el('search')?.addEventListener('input', applySearch);
+  el('leads-tbody')?.addEventListener('click', onDeleteLeadClick);
   checkSession();
 });
